@@ -8,10 +8,104 @@ from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
-
+import tiktoken
+from pathlib import Path
 
 load_dotenv(override=True)
 
+#!----THIS IS FOR MARKETDATALM SERVICE----!
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+import tiktoken
+
+# --- CORRECTED: Load environment variables from the root .env file ---
+# This code constructs the correct path to your .env file, which should be
+# in the root 'aigptcur' directory, one level above this 'app_service' directory.
+try:
+    env_path = Path(__file__).resolve().parent.parent / '.env'
+    print(f"INFO:     Attempting to load environment variables from: {env_path}")
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path)
+        print("INFO:     .env file found and loaded.")
+    else:
+        print("ERROR:    .env file NOT FOUND at the expected path. Please ensure it exists.")
+except Exception as e:
+    print(f"ERROR:    Could not load .env file: {e}")
+
+
+# --- Configuration variables from your original project ---
+# (Add any other original config variables you had here)
+
+
+# --- NEW: Configuration variables merged from MarketDataLM ---
+
+# API Keys
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+
+# Pinecone Configuration
+PINECONE_ENVIRONMENT = "us-east-1"
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "market-data-index")
+
+# --- ADDED: Diagnostic prints to check if variables were loaded ---
+print("\n--- DIAGNOSTIC: Checking loaded environment variables ---")
+print(f"PINECONE_API_KEY loaded: {'Yes' if PINECONE_API_KEY else 'NO - THIS IS THE PROBLEM'}")
+print(f"PINECONE_ENVIRONMENT loaded: {'Yes' if PINECONE_ENVIRONMENT else 'NO - THIS IS THE PROBLEM'}")
+print(f"PINECONE_INDEX_NAME loaded: {PINECONE_INDEX_NAME}") # This has a default, so it should appear
+print("-------------------------------------------------------\n")
+
+
+# OpenAI Model Definitions
+OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
+OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
+
+# Tokenizer for 'text-embedding-ada-002'
+encoding = tiktoken.get_encoding("cl100k_base")
+
+# Brave Search Parameters
+MAX_SCRAPED_SOURCES = 30
+MAX_PAGES = 3
+MAX_ITEMS_PER_DOMAIN = 1
+
+# Content Processing Limits
+MAX_WEBPAGE_CONTENT_TOKENS = 1000
+MAX_EMBEDDING_TOKENS = 8000
+MAX_RERANKED_CONTEXT_ITEMS = 10
+
+# Pinecone Indexing Wait Constants
+PINECONE_MAX_WAIT_TIME = 30
+PINECONE_CHECK_INTERVAL = 1
+
+# Re-ranking Weight Constants
+W_RELEVANCE = float(os.getenv("W_RELEVANCE", 0.5450))
+W_SENTIMENT = float(os.getenv("W_SENTIMENT", 0.1248))
+W_TIME_DECAY = float(os.getenv("W_TIME_DECAY", 0.2814))
+W_IMPACT = float(os.getenv("W_IMPACT", 0.0488))
+
+# Source Credibility Weights
+SOURCE_CREDIBILITY_WEIGHTS = {
+    "moneycontrol.com": 0.9,
+    "economictimes.indiatimes.com": 0.9,
+    "business-standard.com": 0.85,
+    "livemint.com": 0.85,
+    "cnbctv18.com": 0.8,
+    "screener.in": 0.95,
+    "trendlyne.com": 0.9,
+    "bloomberg.com": 0.95,
+    "reuters.com": 0.95,
+    "default": 0.5
+}
+
+# Impact Keywords for Scoring
+IMPACT_KEYWORDS = [
+    "price change", "rating downgrade", "layoffs", "policy changes",
+    "acquisition", "merger", "earnings surprise", "bankruptcy",
+    "restructuring", "dividend cut", "share buyback", "new product launch",
+    "regulatory approval", "legal dispute", "fraud", "scandal",
+    "inflation", "recession", "interest rate", "gdp growth", "unemployment"
+]
 #CHROMA_SERVER
 chroma_username=os.getenv("CHROMA_USERNAME")
 chroma_password=os.getenv("CHROMA_PASSWORD")

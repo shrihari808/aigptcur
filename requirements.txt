@@ -206,3 +206,5 @@ nest-asyncio
 aiofiles
 nltk
 google-search-results
+scikit-optimize
+sentencepiece
