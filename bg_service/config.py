@@ -17,14 +17,10 @@ chroma_host=os.getenv("CHROMA_HOST")
 # print(f"{chroma_username}:{chroma_password}")
 
 
-chroma_server_client=chromadb.HttpClient(
-    host=chroma_host,
+chroma_server_client = chromadb.HttpClient(
+    host=os.getenv("CHROMA_HOST", "localhost"),
     port=9000,
-    ssl=False,
-    headers=None,
-    settings=Settings(chroma_client_auth_provider="chromadb.auth.basic_authn.BasicAuthClientProvider",chroma_client_auth_credentials=f"{chroma_username}:{chroma_password}", allow_reset=True),
-    tenant=DEFAULT_TENANT,
-    database=DEFAULT_DATABASE,
+    # ... other settings
 )
 
 

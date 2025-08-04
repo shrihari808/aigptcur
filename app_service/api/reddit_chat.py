@@ -42,8 +42,22 @@ em = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="thenlp
 post_collection = client.get_or_create_collection(name="post_data", embedding_function=em)
 comment_collection = client.get_or_create_collection(name="comments", embedding_function=em)
 llm_openai = ChatOpenAI(model="gpt-3.5-turbo-16k")
-db3 = Chroma(persist_directory="./new_database", embedding_function=embedding_function, collection_name='post_data')
-db_c = Chroma(persist_directory="./new_database", embedding_function=embedding_function, collection_name='comments')
+#db3 = Chroma(persist_directory="./new_database", embedding_function=embedding_function, collection_name='post_data')
+#db_c = Chroma(persist_directory="./new_database", embedding_function=embedding_function, collection_name='comments')
+
+# This creates a new collection named 'post_data' on your central server
+db3 = Chroma(
+    client=chroma_server_client,
+    collection_name="post_data",
+    embedding_function=embedding_function,
+)
+# This creates another collection named 'comment_data' on your central server
+db_c = Chroma(
+    client=chroma_server_client,
+    collection_name="comment_data",
+    embedding_function=embedding_function,
+)
+
 
 llm_openai = GPT4o_mini
 

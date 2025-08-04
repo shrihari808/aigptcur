@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from langchain.callbacks import get_openai_callback
+from langchain_community.callbacks.manager import get_openai_callback
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -43,9 +43,9 @@ psql_url=os.getenv('DATABASE_URL')
 #     return user_info
 
 
-AI_KEY=os.getenv('AI_KEY')
+OPENAI_API_KEY=os.getenv('OPENAI_API_KEY')
 async def authenticate_ai_key(x_api_key: str = Header(...)):
-    if x_api_key != AI_KEY:
+    if x_api_key != OPENAI_API_KEY:
         raise HTTPException(
             status_code=HTTP_403_FORBIDDEN,
             detail="Invalid or missing API Key",
