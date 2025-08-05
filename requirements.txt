@@ -208,3 +208,8 @@ nltk
 google-search-results
 scikit-optimize
 sentencepiece
+langchain-postgres
+langdetect
+trafilatura
+lxml_html_clean
+sacremoses

@@ -18,7 +18,7 @@ from api.youtube_rag.youtube_chat import yt_chat
 import os
 from starlette.status import HTTP_403_FORBIDDEN
 from langchain_community.chat_message_histories.postgres import PostgresChatMessageHistory
-
+from config import *
 from streaming.streaming import query_validate
 
 
@@ -45,11 +45,12 @@ psql_url=os.getenv('DATABASE_URL')
 
 OPENAI_API_KEY=os.getenv('OPENAI_API_KEY')
 async def authenticate_ai_key(x_api_key: str = Header(...)):
-    if x_api_key != OPENAI_API_KEY:
-        raise HTTPException(
-            status_code=HTTP_403_FORBIDDEN,
-            detail="Invalid or missing API Key",
-        )
+    pass
+    # if x_api_key != OPENAI_API_KEY:
+    #     raise HTTPException(
+    #         status_code=HTTP_403_FORBIDDEN,
+    #         detail="Invalid or missing API Key",
+    #     )
 
 class InputText(BaseModel):
         input_text: str
