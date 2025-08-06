@@ -10,6 +10,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 import tiktoken
 from pathlib import Path
+import numpy as np
 
 load_dotenv(override=True)
 
@@ -54,6 +55,7 @@ print("\n--- DIAGNOSTIC: Checking loaded environment variables ---")
 print(f"PINECONE_API_KEY loaded: {'Yes' if PINECONE_API_KEY else 'NO - THIS IS THE PROBLEM'}")
 print(f"PINECONE_ENVIRONMENT loaded: {'Yes' if PINECONE_ENVIRONMENT else 'NO - THIS IS THE PROBLEM'}")
 print(f"PINECONE_INDEX_NAME loaded: {PINECONE_INDEX_NAME}") # This has a default, so it should appear
+print(f"BRAVE_API_KEY loaded: {'Yes' if BRAVE_API_KEY else 'NO - THIS IS THE PROBLEM'}")
 print("-------------------------------------------------------\n")
 
 
@@ -78,6 +80,11 @@ MAX_RERANKED_CONTEXT_ITEMS = 10
 PINECONE_MAX_WAIT_TIME = 30
 PINECONE_CHECK_INTERVAL = 1
 
+# Context Sufficiency Assessment
+CONTEXT_SUFFICIENCY_THRESHOLD = 0.6
+MIN_CONTEXT_LENGTH = 200  # Minimum characters in context
+MIN_RELEVANT_DOCS = 3     # Minimum number of relevant documents
+
 # Re-ranking Weight Constants
 W_RELEVANCE = float(os.getenv("W_RELEVANCE", 0.5450))
 W_SENTIMENT = float(os.getenv("W_SENTIMENT", 0.1248))
@@ -95,6 +102,11 @@ SOURCE_CREDIBILITY_WEIGHTS = {
     "trendlyne.com": 0.9,
     "bloomberg.com": 0.95,
     "reuters.com": 0.95,
+    "financialexpress.com": 0.85,
+    "thehindubusinessline.com": 0.8,
+    "ndtv.com": 0.75,
+    "zeebiz.com": 0.7,
+    "businesstoday.in": 0.8,
     "default": 0.5
 }
 
@@ -104,8 +116,11 @@ IMPACT_KEYWORDS = [
     "acquisition", "merger", "earnings surprise", "bankruptcy",
     "restructuring", "dividend cut", "share buyback", "new product launch",
     "regulatory approval", "legal dispute", "fraud", "scandal",
-    "inflation", "recession", "interest rate", "gdp growth", "unemployment"
+    "inflation", "recession", "interest rate", "gdp growth", "unemployment",
+    "high", "spike", "surge", "plunge", "soar", "crash", "rally",
+    "breakout", "resistance", "support", "bullish", "bearish"
 ]
+
 #CHROMA_SERVER
 chroma_username=os.getenv("CHROMA_USERNAME")
 chroma_password=os.getenv("CHROMA_PASSWORD")
