@@ -113,7 +113,7 @@ chroma_host=os.getenv("CHROMA_HOST")
 
 chroma_server_client = chromadb.HttpClient(
     host=os.getenv("CHROMA_HOST", "localhost"),
-    port=9000,
+    port=9001,
     # ... other settings
 )
 
