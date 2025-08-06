@@ -66,7 +66,7 @@ from fastapi.responses import JSONResponse
 
 
 
-from streaming.bing_stream import get_bing_results,insert_post1
+from api.news_rag.brave_news import get_brave_results, insert_post1
 from streaming.reddit_stream import fetch_search_red,process_search_red,insert_red
 from streaming.yt_stream import get_data,get_yt_data_async
 # from fund import agent2
@@ -659,71 +659,37 @@ async def web_rag_mix(
     #print(valid)
     if valid == 0:
         #pass
-        matched_docs,docs,memory_query,t_day,his= '', '', '', ''  ,'' 
+        matched_docs,docs,memory_query,t_day,his, links= '', '', '', ''  ,'', []
     else:
         memory_query=await memory_chain(query,m_chat)
         #print(memory_query)
         date,user_q,t_day=await llm_get_date(memory_query)
-        # bing,cmots=set_ret()
-
-        # if date == "None":
-        #     retriever_cmots = vs.as_retriever(search_kwargs={"k": 10})
         
-
-        # else:
-        #     retriever_cmots = vs.as_retriever(search_kwargs={"k": 20, 
-        #                                                 'filter': {'date':{'$gte': int(date)}}
-        #                                                }
-        #                                 )
+        articles, df = await get_brave_results(memory_query)
         
-        docs, df ,links=await get_bing_results(memory_query)
-        #print(docs[0])
-        if docs is not None and df is not None:
+        if articles and df is not None and not df.empty:
             await insert_post1(df)
-            #pinecone_task = asyncio.create_task(data_into_pinecone(df))
+            docs = [f"{article.get('title', '')} {article.get('description', '')}" for article in articles]
+            links = [article.get('source_url') for article in articles]
         else:
-            pass
-            #pinecone_task = None
+            docs, df, links = [], pd.DataFrame(), []
 
-        # # print(links)
-        # docs= '\n'.join(docs)
-        
         try:
-            if date == 'None':
-                results = vs.similarity_search_with_score(
-                    memory_query,
-                    k=10,
-
-                )
-                matched_docs=[doc[0].page_content for doc in results]
-            #docs = retriever.invoke(memory_query)
-            else:
-                results = vs.similarity_search_with_score(
-                    memory_query,
-                    k=10,
-                    filter={"date": {"$gte": int(date)}},
-
-                )
-                matched_docs=[doc[0].page_content for doc in results]
-            #matched_docs = retriever_cmots.invoke(memory_query)
+            search_kwargs = {"k": 10}
+            if date != 'None':
+                search_kwargs['filter'] = {"date": {"$gte": int(date)}}
+            
+            results = vs.similarity_search_with_score(
+                memory_query,
+                **search_kwargs
+            )
+            matched_docs=[doc[0].page_content for doc in results]
         except Exception as e:
-            matched_docs = None  # or [] if you prefer an empty list
-            # Optionally, log the exception or print it for debugging
-            print(f"An error occurred: {e}")
+            matched_docs = []
+            print(f"An error occurred during similarity search: {e}")
 
 
-        # for doc in matched_docs:
-        #     docs += doc.page_content + "\n" 
-
-        #print(docs)
-        # count=count_tokens(docs)
-        # print(count)
-        
-        
-        #his,his_c=get_session_history(str(session_id))
         his=h_chat
-        #print(his_c)
-        # print(count_tokens(his))
 
         res_prompt = """
         Cmots Articles : {cmots}
@@ -753,20 +719,8 @@ async def web_rag_mix(
         """
 
         R_prompt = PromptTemplate(template=res_prompt, input_variables=["cmots","bing","input","date","history"])
-        #llm_chain_res= LLMChain(prompt=R_prompt, llm=llm1)
-        #llm1 = ChatOpenAI(temperature=0.5, model="gpt-4o-mini",streaming=True,stream_usage=True)
-        #formatted_prompt = R_prompt.format(history=his, cmots=matched_docs,bing=docs,date=date,input=memory_query)
-        #entire_data=formatted_prompt
-        # count=count_tokens(entire_data)/1000  +3.5
-        # #print(count)
-        # user_count=get_user_credits(user_id)
-        # if count>user_count:
-        #     raise HTTPException(status_code=400, detail="You have low credits! Please purchase a plan to continue accessing Frruit.")
-    
         ans_chain=R_prompt | llm_stream
 
-    #final_task = asyncio.to_thread(ans_chain.invoke, {"context": docs, "cmots": matched_docs, "input": query,"date":t_day})
-    
     
     async def generate_chat_res(matched_docs,docs,query,t_day,history):
         if valid == 0:
@@ -798,23 +752,16 @@ async def web_rag_mix(
             else:
                 print("Received None chunk")
 
-        #yield b"metadata: " + json.dumps(aggregate.usage_metadata).encode("utf-8")
-        #print(aggregate)
         token_data=aggregate.usage_metadata
         total_tokens=token_data['total_tokens']/1000 +3 
-        #print(total_tokens)
 
-        #store_into_userplan(user_id,total_tokens)
         await insert_credit_usage(user_id,plan_id,total_tokens)
 
         links_data = {
             "links": links
         }
         combined_data = {**links_data}
-        #print(combined_data)
         await store_into_db(session_id,prompt_history_id,combined_data)
-        #return aggregate.usage_metadata
-        #background_tasks.add_task(handle_metadata, aggregate.usage_metadata if aggregate else {})
         history = PostgresChatMessageHistory(
         connection_string=psql_url,
         session_id=session_id,
@@ -826,7 +773,6 @@ async def web_rag_mix(
         history.add_ai_message(aggregate)
 
 
-    #return "hello"
     return StreamingResponse(generate_chat_res(matched_docs,docs,memory_query,t_day,his), media_type="text/event-stream")
 
 
@@ -839,7 +785,7 @@ async def red_rag_bing(
     plan_id: int = Query(...),
     ai_key_auth: str = Depends(authenticate_ai_key)
 ):
-    query = request.query  
+    query = request.query 
     valid,v_tokens,m_chat,h_chat=await query_validate(query,session_id)
     #print(valid)
     if valid == 2:
@@ -883,20 +829,7 @@ async def red_rag_bing(
         """
 
         R_prompt = PromptTemplate(template=res_prompt, input_variables=["history","context","input"])
-        #llm_chain_res= LLMChain(prompt=R_prompt, llm=llm1)
-        #llm1 = ChatOpenAI(temperature=0.5, model="gpt-4o-mini",streaming=True,stream_usage=True)
-        # formatted_prompt = R_prompt.format(history=his, context=docs,input=query)
-        # entire_data=formatted_prompt
-        # count=count_tokens(entire_data)/1000 +3.5
-        # #print(count)
-        # user_count=get_user_credits(user_id)
-        # if count>user_count:
-        #     raise HTTPException(status_code=400, detail="You have low credits! Please purchase a plan to continue accessing Frruit.")
-    
         ans_chain=R_prompt | llm_stream
-
-        #final_task = asyncio.to_thread(ans_chain.invoke, {"context": docs, "cmots": matched_docs, "input": query,"date":t_day})
-    
     
     async def generate_chat_res(his,docs,query):
         if valid == 2:
@@ -929,26 +862,17 @@ async def red_rag_bing(
             else:
                 print("Received None chunk")
 
-        #yield b"metadata: " + json.dumps(aggregate.usage_metadata).encode("utf-8")
-        #print(aggregate)
         token_data=aggregate.usage_metadata
         total_tokens=token_data['total_tokens']/1000 +3
-        #print(total_tokens)
-        # total_tokens=total_tokens+3
-        # print(total_tokens)
 
-        #store_into_userplan(user_id,total_tokens)
         await insert_credit_usage(user_id,plan_id,total_tokens)
 
         links_data = {
             "links": links
         }
         combined_data = {**links_data}
-        #print(combined_data)
         await store_into_db(session_id,prompt_history_id,combined_data)
     
-        #return aggregate.usage_metadata
-        # #background_tasks.add_task(handle_metadata, aggregate.usage_metadata if aggregate else {})
         history = PostgresChatMessageHistory(
         connection_string=psql_url,
         session_id=session_id,
@@ -960,7 +884,6 @@ async def red_rag_bing(
         history.add_ai_message(aggregate)
 
 
-    #return "hello"
     return StreamingResponse(generate_chat_res(his,docs,query), media_type="text/event-stream")
 
 
@@ -974,21 +897,13 @@ async def yt_rag_bing(request: InRequest,
 ):
     query = request.query 
     valid,v_tokens,m_chat,h_chat=await query_validate(query,session_id)
-    #print(valid)
     if valid == 2:
-        #pass
         his,data,query= '', '', ''
-    #start_time = time.time()
     else:
         links =await get_yt_data_async(query)
-        #print(links)
         data = await get_data(links)
-
-        
-        #his,his_c=get_session_history(str(session_id))
         his=h_chat
 
-        #data="Reliance Industries News - Get the Latest Reliance Industries News, Announcements, Photos & Videos on The Economic Times. Stock Quotes: Get all stocks market quotes, company stocks price quotes in India. ... Sensex News: On Friday, the Sensex surged nearly 1,300 points, while the Nifty50 reached a record high, driven by broad-based buying despite concerns over the capital gains tax hike in the Budget. The total market capitalization of BSE-listed companies increased by Rs 7.16 lakh crore to ... Discover the Reliance Industries Stock Liveblog, your ultimate resource for real-time updates and insightful analysis on a prominent stock. Keep track of Reliance Industries with the latest details, including: Last traded price 3037.95, Market capitalization: 2055275.89, Volume: 2800552, Price-to-earnings ratio 29.91, Earnings per share 101.6. Our comprehensive coverage combines fundamental and technical indicators to provide you with a comprehensive view of Reliance Industries's performance. Get all latest & breaking news on Reliance Industries. Watch videos, top stories and articles on Reliance Industries at moneycontrol.com. Reliance Q1 Results Updates: Reliance Industries Ltd (RIL), the energy-to-telecom-to-retail conglomerate, posted a 5.4 per cent year-on-year (YoY) decline in its net profit to ₹15,138 crore ... Reliance Infrastructure News - Get the Latest Reliance Infrastructure News, Announcements, Photos & Videos on The Economic Times. Stock Quotes: Get all stocks market quotes, company stocks price quotes in India. Visit Economic Times to read on Indian companies quotes listed on BSE NSE Stock Exchanges & search share prices by market capitalisation. Reliance Jio Q1 result: Jio reported an average revenue per user (ARPU) at ₹181.70, consistent with the previous quarter, and slightly up from ₹180.50 year-on-year, while total subscribers have risen to 489.7 million from 481.8 million last quarter and 448.5 million year-on-year. Reliance Industries Ltd share price was Rs 3,017.85 at close on 26th Jul 2024. Reliance Industries Ltd share price was up by 1.18 % over the previous closing price of Rs 2,982.60. Reliance Industries Ltd share price trend: Last 1 Month: Reliance Industries Ltd share price moved down by 0.31 % on BSE. Last 3 Months: Reliance Industries Ltd share ... Reliance Industries share price. Reliance Industries is trading 1.18 % upper at Rs 3,017.85 as compared to its last closing price. Reliance Industries has been trading in the price range of 3,025. ... Reliance Industries Share Price Live Updates: The analyst recommendation trend is shown below with the current rating as Buy. The median price target is ₹3379.0, 11.68% higher than current market price. The lowest target price among analyst estimates is ₹2600.0. The highest target price among analyst estimates is ₹3786.0. Reliance Industries Share Price Live Updates: Today, Reliance Industries' stock price dropped by 0.5% to reach ₹3025.55, while its industry counterparts are showing mixed results. Oil & Natural Gas Corporation and Petronet LNG are experiencing declines, whereas Oil India and Hindustan Petroleum Corporation are witnessing an increase in their stock prices. In general, the benchmark indices Nifty and Sensex are up by 0.09% and 0.12% respectively. Reliance Industries Share Price Today Live: A decrease in futures price, combined with an increase in open interest for Reliance Industries, indicates the possibility of downward price movement in the near future. Traders may consider maintaining their short positions."
         prompt = """
         Given youtube transcripts {summaries}
         chat_history {history}
@@ -1004,40 +919,23 @@ async def yt_rag_bing(request: InRequest,
         The user has asked the following question: {query}
 
         """
-        #llm = ChatOpenAI(temperature=0.5, model="gpt-4o-mini",streaming=True,stream_usage=True)
         yt_prompt = PromptTemplate(template=prompt, input_variables=["history","query", "summaries"])
-        formatted_prompt = yt_prompt.format(history=his, summaries=data,query=query)
-        # entire_data=formatted_prompt
-        # count=count_tokens(entire_data)/1000 +3.5
-        # #print(count)
-        # user_count=get_user_credits(user_id)
-        # if count>user_count:
-        #     raise HTTPException(status_code=400, detail="You have low credits! Please purchase a plan to continue accessing Frruit.")
         chain = yt_prompt | llm_stream
     
     async def generate_chat_res(his,data,query):
         if valid == 2:
-            # Stream "Not a valid question" if the query is invalid
-            
             error_message = "The search query you're trying to use does not appear to be related to the Indian financial markets. Please ensure your query focuses on topics like finance, investing, stocks, or other related subjects to maintain platform quality. If your query is relevant but isn’t yielding the desired results, consider refining it to improve accuracy and alignment with financial market topics"
-            # Split the error message into smaller chunks
-            error_chunks = error_message.split('. ')  # You can choose a different delimiter if needed
+            error_chunks = error_message.split('. ') 
             
             for chunk in error_chunks:
-                yield chunk.encode("utf-8")  # Yield each chunk as bytes
-                await asyncio.sleep(1)  # Adjust the delay as needed for a smoother stream
+                yield chunk.encode("utf-8")
+                await asyncio.sleep(1)
                 
             return
         
         aggregate = None
-        #yield "Data:"+json.dumps(d)
-        #yield "Response:"
         async for chunk in chain.astream({"history":his,"summaries": data, "query": query}):
-            #return chunk
-            
             if chunk is not None:
-                #print(chunk)
-                #print(type(chunk))
                 answer = chunk.content
                 aggregate = chunk if aggregate is None else aggregate + chunk
                 if answer is not None:
@@ -1050,20 +948,13 @@ async def yt_rag_bing(request: InRequest,
 
         token_data=aggregate.usage_metadata
         total_tokens=token_data['total_tokens']/1000 +3
-        #print(total_tokens)
-
-        #store_into_userplan(user_id,total_tokens)
         await insert_credit_usage(user_id,plan_id,total_tokens)
 
         links_data = {
             "links": links
         }
         combined_data = {**links_data}
-        #print(combined_data)
         await store_into_db(session_id,prompt_history_id,combined_data)
-    
-        #return aggregate.usage_metadata
-        # #background_tasks.add_task(handle_metadata, aggregate.usage_metadata if aggregate else {})
         history = PostgresChatMessageHistory(
         connection_string=psql_url,
         session_id=session_id,
@@ -1075,5 +966,4 @@ async def yt_rag_bing(request: InRequest,
         history.add_ai_message(aggregate)
 
 
-    #return "hello"
     return StreamingResponse(generate_chat_res(his,data,query), media_type="text/event-stream")
