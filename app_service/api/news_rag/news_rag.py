@@ -215,7 +215,7 @@ async def web_rag(query: str, session_id: str):
             pinecone_task = asyncio.create_task(data_into_pinecone(df))
 
             # Allow a very brief moment for new data to be retrievable, but don't block.
-            await asyncio.sleep(0.1) 
+            asyncio.sleep(0.1) 
 
             all_relevant_docs = lotr.get_relevant_documents(user_q)
             passages = [{"text": doc.page_content, "metadata": doc.metadata} for doc in all_relevant_docs]

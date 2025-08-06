@@ -430,10 +430,8 @@ async def insert_credit_usage(user_id, plan_id, credit_used):
 
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
     history = PostgresChatMessageHistory(
-    connection_string = psql_url,
-    session_id=session_id,
+        str(session_id), psql_url
     )
-#memory = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k=2, chat_memory=history)
     return history.messages
 
 class InRequest(BaseModel):
@@ -630,8 +628,7 @@ async def cmots_only(
         await store_into_db(session_id,prompt_history_id,combined_data)
     
         history = PostgresChatMessageHistory(
-        connection_string=psql_url,
-        session_id=session_id,
+            str(session_id), psql_url
         )
 
 
@@ -668,7 +665,7 @@ async def web_rag_mix(
         articles, df = await get_brave_results(memory_query)
         
         if articles and df is not None and not df.empty:
-            await insert_post1(df)
+            insert_post1(df)
             docs = [f"{article.get('title', '')} {article.get('description', '')}" for article in articles]
             links = [article.get('source_url') for article in articles]
         else:
@@ -763,8 +760,7 @@ async def web_rag_mix(
         combined_data = {**links_data}
         await store_into_db(session_id,prompt_history_id,combined_data)
         history = PostgresChatMessageHistory(
-        connection_string=psql_url,
-        session_id=session_id,
+            str(session_id), psql_url
         )
 
 
@@ -801,8 +797,7 @@ async def red_rag_bing(
 
         def get_session_history(session_id: str) -> BaseChatMessageHistory:
             history = PostgresChatMessageHistory(
-            connection_string = psql_url,
-            session_id=session_id,
+                str(session_id), psql_url
             )
         #memory = ConversationBufferWindowMemory(memory_key="chat_history", return_messages=True, k=2, chat_memory=history)
             return history.messages,history
@@ -874,8 +869,7 @@ async def red_rag_bing(
         await store_into_db(session_id,prompt_history_id,combined_data)
     
         history = PostgresChatMessageHistory(
-        connection_string=psql_url,
-        session_id=session_id,
+            str(session_id), psql_url
         )
 
 
@@ -956,8 +950,7 @@ async def yt_rag_bing(request: InRequest,
         combined_data = {**links_data}
         await store_into_db(session_id,prompt_history_id,combined_data)
         history = PostgresChatMessageHistory(
-        connection_string=psql_url,
-        session_id=session_id,
+            str(session_id), psql_url
         )
 
 
