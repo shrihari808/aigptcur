@@ -68,7 +68,7 @@ encoding = tiktoken.get_encoding("cl100k_base")
 
 # Brave Search Parameters
 MAX_SCRAPED_SOURCES = 30
-MAX_PAGES = 3
+MAX_PAGES = 1
 MAX_ITEMS_PER_DOMAIN = 1
 
 # Content Processing Limits
@@ -81,7 +81,7 @@ PINECONE_MAX_WAIT_TIME = 30
 PINECONE_CHECK_INTERVAL = 1
 
 # Context Sufficiency Assessment
-CONTEXT_SUFFICIENCY_THRESHOLD = 0.6
+CONTEXT_SUFFICIENCY_THRESHOLD = 0.3
 MIN_CONTEXT_LENGTH = 200  # Minimum characters in context
 MIN_RELEVANT_DOCS = 3     # Minimum number of relevant documents
 
