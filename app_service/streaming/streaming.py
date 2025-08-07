@@ -1,3 +1,4 @@
+# /aigptcur/app_service/streaming/streaming.py
 import os
 from langchain_pinecone import PineconeVectorStore
 from langchain_openai import OpenAIEmbeddings
@@ -851,7 +852,7 @@ async def web_rag_mix(
 
     async def generate_chat_res(matched_docs, docs, query, t_day, history):
         if valid == 0:
-            error_message = "The search query you're trying to use does not appear to be related to the Indian financial markets. Please ensure your query focuses on topics like finance, investing, stocks, or other related subjects to maintain platform quality. If your query is relevant but isn't yielding the desired results, consider refining it to improve accuracy and alignment with financial market topics"
+            error_message = "The search query you're trying to use does not appear to be related to the Indian financial markets. Please ensure your query focuses on topics like finance, investing, stocks, or other related subjects to maintain platform quality. If your query is relevant but isn’t yielding the desired results, consider refining it to improve accuracy and alignment with financial market topics"
             error_chunks = error_message.split('. ')
             
             for chunk in error_chunks:
@@ -861,44 +862,40 @@ async def web_rag_mix(
             return
         
         aggregate = None
-        async for chunk in ans_chain.astream({"cmots": matched_docs,"bing":docs,"input": query,"date":t_day,"history":his}):
-            if chunk is not None:
-                answer = chunk.content
-                aggregate = chunk if aggregate is None else aggregate + chunk
-                if answer is not None:
-                    await asyncio.sleep(0.01) 
-                    yield answer.encode("utf-8")
+        try:
+            async for chunk in ans_chain.astream({"cmots": matched_docs,"bing":docs,"input": query,"date":t_day,"history":his}):
+                if chunk is not None:
+                    answer = chunk.content
+                    aggregate = chunk if aggregate is None else aggregate + chunk
+                    if answer is not None:
+                        await asyncio.sleep(0.01) 
+                        yield answer.encode("utf-8")
+                else:
+                    print("Received None chunk")
+
+            if aggregate and hasattr(aggregate, 'usage_metadata') and aggregate.usage_metadata:
+                token_data = aggregate.usage_metadata
+                total_tokens = token_data.get('total_tokens', 0) / 1000 + 3
+                await insert_credit_usage(user_id, plan_id, total_tokens)
             else:
-                print("Received None chunk")
+                print("WARN: No usage_metadata found in aggregate. Skipping token count.")
 
-        token_data = aggregate.usage_metadata
-        total_tokens = token_data['total_tokens']/1000 + 3 
+            links_data = {"links": links}
+            await store_into_db(session_id, prompt_history_id, links_data)
 
-        await insert_credit_usage(user_id, plan_id, total_tokens)
-
-        links_data = {"links": links}
-        combined_data = {**links_data}
-        await store_into_db(session_id, prompt_history_id, combined_data)
-
-        # Construct the final response object to be saved
-        final_response_to_save = {
-            "Response": aggregate.content if aggregate else "",
-            "links": links,
-            "Total_Tokens": token_data.get('total_tokens'),
-            "Prompt_Tokens": token_data.get('input_tokens'),
-            "Completion_Tokens": token_data.get('output_tokens'),
-            "session_id": session_id,
-            "prompt_history_id": prompt_history_id,
-            "query": query
-        }
-        # Save the final response to a JSON file
-        save_response_to_json(str(session_id), final_response_to_save)
-
-        history = PostgresChatMessageHistory(str(session_id), psql_url)
-        history.add_user_message(memory_query)
-        history.add_ai_message(aggregate)
+            if aggregate:
+                history = PostgresChatMessageHistory(str(session_id), psql_url)
+                history.add_user_message(memory_query)
+                history.add_ai_message(aggregate)
+        except asyncio.CancelledError:
+            print("INFO: Client disconnected, streaming was cancelled.")
+            # No further action needed, the generator will just stop.
+        except Exception as e:
+            print(f"ERROR: An error occurred during streaming: {e}")
+            yield b"An error occurred while generating the response."
 
     return StreamingResponse(generate_chat_res(matched_docs, docs, memory_query, t_day, his), media_type="text/event-stream")
+
 
 @red_rag.post("/reddit_rag")
 async def red_rag_bing(
@@ -970,40 +967,46 @@ async def red_rag_bing(
         
 
         aggregate = None
-        async for chunk in ans_chain.astream({"history":his,"context": docs,"input": query}):
-            #return chunk
-            
-            if chunk is not None:
-                #print(type(chunk))
-                answer = chunk.content
-                aggregate = chunk if aggregate is None else aggregate + chunk
-                if answer is not None:
-                    await asyncio.sleep(0.01) 
-                    yield answer.encode("utf-8")
+        try:
+            async for chunk in ans_chain.astream({"history":his,"context": docs,"input": query}):
+                #return chunk
+                
+                if chunk is not None:
+                    #print(type(chunk))
+                    answer = chunk.content
+                    aggregate = chunk if aggregate is None else aggregate + chunk
+                    if answer is not None:
+                        await asyncio.sleep(0.01) 
+                        yield answer.encode("utf-8")
+                    else:
+                        pass
                 else:
-                    pass
+                    print("Received None chunk")
+            
+            if aggregate and hasattr(aggregate, 'usage_metadata') and aggregate.usage_metadata:
+                token_data = aggregate.usage_metadata
+                total_tokens = token_data.get('total_tokens', 0) / 1000 + 3
+                await insert_credit_usage(user_id, plan_id, total_tokens)
             else:
-                print("Received None chunk")
+                print("WARN: No usage_metadata found in aggregate. Skipping token count.")
 
-        token_data=aggregate.usage_metadata
-        total_tokens=token_data['total_tokens']/1000 +3
-
-        await insert_credit_usage(user_id,plan_id,total_tokens)
-
-        links_data = {
-            "links": links
-        }
-        combined_data = {**links_data}
-        await store_into_db(session_id,prompt_history_id,combined_data)
-    
-        history = PostgresChatMessageHistory(
-            str(session_id), psql_url
-        )
-
-
-
-        history.add_user_message(query)
-        history.add_ai_message(aggregate)
+            links_data = {
+                "links": links
+            }
+            combined_data = {**links_data}
+            await store_into_db(session_id,prompt_history_id,combined_data)
+        
+            history = PostgresChatMessageHistory(
+                str(session_id), psql_url
+            )
+            history.add_user_message(query)
+            history.add_ai_message(aggregate)
+        
+        except asyncio.CancelledError:
+            print("INFO: Client disconnected, streaming was cancelled.")
+        except Exception as e:
+            print(f"ERROR: An error occurred during streaming: {e}")
+            yield b"An error occurred while generating the response."
 
 
     return StreamingResponse(generate_chat_res(his,docs,query), media_type="text/event-stream")
@@ -1056,35 +1059,44 @@ async def yt_rag_bing(request: InRequest,
             return
         
         aggregate = None
-        async for chunk in chain.astream({"history":his,"summaries": data, "query": query}):
-            if chunk is not None:
-                answer = chunk.content
-                aggregate = chunk if aggregate is None else aggregate + chunk
-                if answer is not None:
-                    await asyncio.sleep(0.01) 
-                    yield answer.encode("utf-8")
+        try:
+            async for chunk in chain.astream({"history":his,"summaries": data, "query": query}):
+                if chunk is not None:
+                    answer = chunk.content
+                    aggregate = chunk if aggregate is None else aggregate + chunk
+                    if answer is not None:
+                        await asyncio.sleep(0.01) 
+                        yield answer.encode("utf-8")
+                    else:
+                        pass
                 else:
-                    pass
+                    print("Received None chunk")
+            
+            if aggregate and hasattr(aggregate, 'usage_metadata') and aggregate.usage_metadata:
+                token_data = aggregate.usage_metadata
+                total_tokens = token_data.get('total_tokens', 0) / 1000 + 3
+                await insert_credit_usage(user_id, plan_id, total_tokens)
             else:
-                print("Received None chunk")
+                print("WARN: No usage_metadata found in aggregate. Skipping token count.")
 
-        token_data=aggregate.usage_metadata
-        total_tokens=token_data['total_tokens']/1000 +3
-        await insert_credit_usage(user_id,plan_id,total_tokens)
-
-        links_data = {
-            "links": links
-        }
-        combined_data = {**links_data}
-        await store_into_db(session_id,prompt_history_id,combined_data)
-        history = PostgresChatMessageHistory(
-            str(session_id), psql_url
-        )
+            links_data = {
+                "links": links
+            }
+            combined_data = {**links_data}
+            await store_into_db(session_id,prompt_history_id,combined_data)
+            history = PostgresChatMessageHistory(
+                str(session_id), psql_url
+            )
 
 
 
-        history.add_user_message(query)
-        history.add_ai_message(aggregate)
+            history.add_user_message(query)
+            history.add_ai_message(aggregate)
 
+        except asyncio.CancelledError:
+            print("INFO: Client disconnected, streaming was cancelled.")
+        except Exception as e:
+            print(f"ERROR: An error occurred during streaming: {e}")
+            yield b"An error occurred while generating the response."
 
     return StreamingResponse(generate_chat_res(his,data,query), media_type="text/event-stream")

@@ -1,3 +1,4 @@
+# /aigptcur/app_service/config.py
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -107,7 +108,7 @@ if OPENAI_API_TYPE == "azure":
     azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
     api_key = os.getenv("AZURE_OPENAI_API_KEY")
     api_version = os.getenv("OPENAI_API_VERSION")
-    azure_chat_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") 
+    azure_chat_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME")
     azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME")
 
     if not all([azure_endpoint, api_key, api_version, azure_chat_deployment, azure_embedding_deployment]):
@@ -128,19 +129,42 @@ if OPENAI_API_TYPE == "azure":
         model_name=azure_embedding_deployment
     )
     
-    llm_kwargs = {
-        "azure_endpoint": azure_endpoint,
-        "api_key": api_key,
-        "api_version": api_version,
-        "azure_deployment": azure_chat_deployment,
-    }
-
-    # FIX: Removed the 'temperature' parameter as it's not supported by the user's Azure deployment
-    GPT4o_mini = AzureChatOpenAI(**llm_kwargs)
-    llm_stream = AzureChatOpenAI(streaming=True, **llm_kwargs)
-    llm_date = AzureChatOpenAI(**llm_kwargs)
-    llm_screener = AzureChatOpenAI(**llm_kwargs)
-    GPT3_16k = AzureChatOpenAI(azure_deployment=os.getenv("AZURE_OPENAI_GPT3_16K_DEPLOYMENT_NAME", "gpt-35-turbo-16k"), **{k:v for k,v in llm_kwargs.items() if k != 'azure_deployment'})
+    GPT4o_mini = AzureChatOpenAI(
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        api_version=api_version,
+        azure_deployment=azure_chat_deployment,
+        temperature=1.0
+    )
+    llm_stream = AzureChatOpenAI(
+        streaming=True,
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        api_version=api_version,
+        azure_deployment=azure_chat_deployment,
+        temperature=1.0
+    )
+    llm_date = AzureChatOpenAI(
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        api_version=api_version,
+        azure_deployment=azure_chat_deployment,
+        temperature=1.0
+    )
+    llm_screener = AzureChatOpenAI(
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        api_version=api_version,
+        azure_deployment=azure_chat_deployment,
+        temperature=1.0
+    )
+    GPT3_16k = AzureChatOpenAI(
+        azure_deployment=os.getenv("AZURE_OPENAI_GPT3_16K_DEPLOYMENT_NAME", "gpt-35-turbo-16k"),
+        azure_endpoint=azure_endpoint,
+        api_key=api_key,
+        api_version=api_version,
+        temperature=1.0
+    )
 
 else:
     # Standard OpenAI Configuration
