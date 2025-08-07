@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from typing import Any, List
 
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI, AzureOpenAIEmbeddings, AzureChatOpenAI
 from langchain_groq import ChatGroq
 from langchain_pinecone import PineconeVectorStore
 from langchain.chains import create_retrieval_chain
@@ -67,7 +67,7 @@ try:
 except Exception as e:
     raise e
 
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+embeddings = AzureOpenAIEmbeddings(model="text-embedding-3-small")
 news_rag_vectorstore = PineconeVectorStore(index_name=NEWS_RAG_INDEX_NAME, embedding=embeddings, namespace='news')
 brave_news_vectorstore = PineconeVectorStore(index_name=BING_NEWS_INDEX_NAME, embedding=embeddings, namespace='bing')
 cmots_vectorstore = Chroma(

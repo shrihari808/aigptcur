@@ -1,5 +1,4 @@
 # /aigptcur/app_service/main.py
-
 import os
 import sys
 from fastapi import FastAPI

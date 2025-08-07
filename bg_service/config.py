@@ -23,18 +23,39 @@ chroma_server_client = chromadb.HttpClient(
     # ... other settings
 )
 
+if os.getenv("OPENAI_API_TYPE") == "azure":
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    api_version = os.getenv("OPENAI_API_VERSION")
+    azure_chat_deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT_NAME")
+    azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME")
+    
+    if not all([azure_endpoint, api_key, api_version, azure_chat_deployment, azure_embedding_deployment]):
+        raise ValueError("Azure OpenAI credentials are not fully set in the environment variables.")
+
+    embeddings = AzureOpenAIEmbeddings(
+        azure_deployment=azure_embedding_deployment,
+        api_key=api_key,
+        azure_endpoint=azure_endpoint,
+        api_version=api_version,
+    )
+    
+    llm_kwargs = {
+        "azure_endpoint": azure_endpoint,
+        "api_key": api_key,
+        "api_version": api_version,
+        "azure_deployment": azure_chat_deployment,
+    }
+    
+    GPT4o_mini = AzureChatOpenAI(temperature=0.2, **llm_kwargs)
+    
+else:
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    GPT4o_mini = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
+
 
 client=chroma_server_client
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 vs= Chroma(
     client=client,
     collection_name="cmots_news",
     embedding_function=embeddings,)
-
-
-
-GPT3_4k = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-0613")
-GPT3_16k = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-16k")
-GPT4 = ChatOpenAI(temperature=0, model="gpt-4-turbo-2024-04-09")
-GPT4o =ChatOpenAI(temperature=0, model="gpt-4o")
-GPT4o_mini=ChatOpenAI(temperature=0.2, model="gpt-4o-mini")

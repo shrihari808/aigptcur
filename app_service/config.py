@@ -1,69 +1,43 @@
-import chromadb
-from chromadb.config import Settings,DEFAULT_DATABASE,DEFAULT_TENANT
 import os
-from langchain_openai import ChatOpenAI
-import chromadb.utils.embedding_functions as embedding_functions
-import os
-from chromadb.utils import embedding_functions
-from dotenv import load_dotenv
-from langchain_openai import OpenAIEmbeddings
-from langchain_chroma import Chroma
-import tiktoken
 from pathlib import Path
-import numpy as np
-
-load_dotenv(override=True)
-
-#!----THIS IS FOR MARKETDATALM SERVICE----!
-import os
 from dotenv import load_dotenv
-from pathlib import Path
-import tiktoken
 
-# --- CORRECTED: Load environment variables from the root .env file ---
-# This code constructs the correct path to your .env file, which should be
-# in the root 'aigptcur' directory, one level above this 'app_service' directory.
+# --- Robust .env loading ---
+# This is placed at the very top to ensure variables are loaded before any other code runs.
+# It explicitly finds the .env file in the project root directory (one level up from 'app_service').
 try:
     env_path = Path(__file__).resolve().parent.parent / '.env'
-    print(f"INFO:     Attempting to load environment variables from: {env_path}")
     if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
-        print("INFO:     .env file found and loaded.")
+        load_dotenv(dotenv_path=env_path, override=True)
+        print("INFO: config.py loaded .env file successfully.")
     else:
-        print("ERROR:    .env file NOT FOUND at the expected path. Please ensure it exists.")
+        print("WARNING: .env file not found at the expected path, attempting default load.")
+        load_dotenv(override=True)
 except Exception as e:
-    print(f"ERROR:    Could not load .env file: {e}")
+    print(f"ERROR: Could not load .env file in config.py: {e}")
 
 
-# --- Configuration variables from your original project ---
-# (Add any other original config variables you had here)
+import chromadb
+import tiktoken
+import numpy as np
+from chromadb.utils import embedding_functions
+from langchain_openai import ChatOpenAI, AzureChatOpenAI, OpenAIEmbeddings, AzureOpenAIEmbeddings
+from langchain_chroma import Chroma
 
-
-# --- NEW: Configuration variables merged from MarketDataLM ---
-
-# API Keys
+# --- API Keys and Configuration variables ---
+# These are now read directly after being loaded.
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-
-# Pinecone Configuration
 PINECONE_ENVIRONMENT = "us-east-1"
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "market-data-index")
-
-# --- ADDED: Diagnostic prints to check if variables were loaded ---
-print("\n--- DIAGNOSTIC: Checking loaded environment variables ---")
-print(f"PINECONE_API_KEY loaded: {'Yes' if PINECONE_API_KEY else 'NO - THIS IS THE PROBLEM'}")
-print(f"PINECONE_ENVIRONMENT loaded: {'Yes' if PINECONE_ENVIRONMENT else 'NO - THIS IS THE PROBLEM'}")
-print(f"PINECONE_INDEX_NAME loaded: {PINECONE_INDEX_NAME}") # This has a default, so it should appear
-print(f"BRAVE_API_KEY loaded: {'Yes' if BRAVE_API_KEY else 'NO - THIS IS THE PROBLEM'}")
-print("-------------------------------------------------------\n")
-
+OPENAI_API_TYPE = os.getenv("OPENAI_API_TYPE")
 
 # OpenAI Model Definitions
 OPENAI_CHAT_MODEL = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
 OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
 
-# Tokenizer for 'text-embedding-ada-002'
+# Tokenizer
 encoding = tiktoken.get_encoding("cl100k_base")
 
 # Brave Search Parameters
@@ -71,7 +45,8 @@ MAX_SCRAPED_SOURCES = 30
 MAX_PAGES = 1
 MAX_ITEMS_PER_DOMAIN = 1
 
-# Content Processing Limits
+
+# Other constants
 MAX_WEBPAGE_CONTENT_TOKENS = 1000
 MAX_EMBEDDING_TOKENS = 8000
 MAX_RERANKED_CONTEXT_ITEMS = 10
@@ -80,12 +55,9 @@ MAX_RERANKED_CONTEXT_ITEMS = 10
 PINECONE_MAX_WAIT_TIME = 30
 PINECONE_CHECK_INTERVAL = 1
 
-# Context Sufficiency Assessment
 CONTEXT_SUFFICIENCY_THRESHOLD = 0.3
-MIN_CONTEXT_LENGTH = 200  # Minimum characters in context
-MIN_RELEVANT_DOCS = 3     # Minimum number of relevant documents
-
-# Re-ranking Weight Constants
+MIN_CONTEXT_LENGTH = 200
+MIN_RELEVANT_DOCS = 3
 W_RELEVANCE = float(os.getenv("W_RELEVANCE", 0.5450))
 W_SENTIMENT = float(os.getenv("W_SENTIMENT", 0.1248))
 W_TIME_DECAY = float(os.getenv("W_TIME_DECAY", 0.2814))
@@ -121,51 +93,80 @@ IMPACT_KEYWORDS = [
     "breakout", "resistance", "support", "bullish", "bearish"
 ]
 
-#CHROMA_SERVER
-chroma_username=os.getenv("CHROMA_USERNAME")
-chroma_password=os.getenv("CHROMA_PASSWORD")
-chroma_host=os.getenv("CHROMA_HOST")
 
+# CHROMA_SERVER Configuration
 chroma_server_client = chromadb.HttpClient(
     host=os.getenv("CHROMA_HOST", "localhost"),
     port=9001,
-    # ... other settings
 )
 
+# --- Conditional LLM and Embeddings Initialization ---
 
-client=chroma_server_client
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-vs= Chroma(
+if OPENAI_API_TYPE == "azure":
+    # Azure OpenAI Configuration
+    azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
+    api_version = os.getenv("OPENAI_API_VERSION")
+    azure_chat_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME") 
+    azure_embedding_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT_NAME")
+
+    if not all([azure_endpoint, api_key, api_version, azure_chat_deployment, azure_embedding_deployment]):
+        raise ValueError("Azure OpenAI credentials are not fully set in the environment variables.")
+
+    embeddings = AzureOpenAIEmbeddings(
+        azure_deployment=azure_embedding_deployment,
+        api_key=api_key,
+        azure_endpoint=azure_endpoint,
+        api_version=api_version,
+    )
+
+    openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=api_key,
+        api_base=azure_endpoint,
+        api_type='azure',
+        api_version=api_version,
+        model_name=azure_embedding_deployment
+    )
+    
+    llm_kwargs = {
+        "azure_endpoint": azure_endpoint,
+        "api_key": api_key,
+        "api_version": api_version,
+        "azure_deployment": azure_chat_deployment,
+    }
+
+    # FIX: Removed the 'temperature' parameter as it's not supported by the user's Azure deployment
+    GPT4o_mini = AzureChatOpenAI(**llm_kwargs)
+    llm_stream = AzureChatOpenAI(streaming=True, **llm_kwargs)
+    llm_date = AzureChatOpenAI(**llm_kwargs)
+    llm_screener = AzureChatOpenAI(**llm_kwargs)
+    GPT3_16k = AzureChatOpenAI(azure_deployment=os.getenv("AZURE_OPENAI_GPT3_16K_DEPLOYMENT_NAME", "gpt-35-turbo-16k"), **{k:v for k,v in llm_kwargs.items() if k != 'azure_deployment'})
+
+else:
+    # Standard OpenAI Configuration
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    openai_ef = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model_name="text-embedding-3-small"
+    )
+    GPT3_16k = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-16k")
+    GPT4o_mini = ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
+    llm_stream = ChatOpenAI(temperature=0.5, model="gpt-4o-mini", stream_usage=True, streaming=True)
+    llm_date = ChatOpenAI(temperature=0.3, model="gpt-4o-2024-05-13")
+    llm_screener = ChatOpenAI(temperature=0.5, model='gpt-4o-mini')
+
+# --- ChromaDB Vector Store Initialization ---
+client = chroma_server_client
+vs = Chroma(
     client=client,
     collection_name="brave_scraped",
-    embedding_function=embeddings,)
+    embedding_function=embeddings,
+)
 
-vs_promoter= Chroma(
+vs_promoter = Chroma(
     client=client,
-    collection_name="promoters_202409",  #promoters,promoters_202409
-    embedding_function=embeddings,)
-
-
-
-openai_ef = embedding_functions.OpenAIEmbeddingFunction(
-                api_key=os.getenv("OPENAI_API_KEY"),
-                model_name="text-embedding-3-small"
-            )
-
+    collection_name="promoters_202409",
+    embedding_function=embeddings,
+)
 
 default_ef = embedding_functions.DefaultEmbeddingFunction()
-
-
-
-GPT3_4k = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-0613")
-GPT3_16k = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-16k")
-GPT4 = ChatOpenAI(temperature=0, model="gpt-4-turbo-2024-04-09")
-GPT4o =ChatOpenAI(temperature=0, model="gpt-4o")
-GPT4o_mini=ChatOpenAI(temperature=0.2, model="gpt-4o-mini")
-llm_stream = ChatOpenAI(temperature=0.5, model="gpt-4o-mini",stream_usage=True,streaming=True)
-llm_date = ChatOpenAI(temperature=0.3, model="gpt-4o-2024-05-13")
-
-
-llm_screener = ChatOpenAI(temperature = 0.5 ,model ='gpt-4o-mini')
-
-#POSTGRES
