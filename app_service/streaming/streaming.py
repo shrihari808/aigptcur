@@ -434,6 +434,24 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
     )
     return history.messages
 
+def save_response_to_json(session_id: str, response_data: dict):
+    """Saves the LLM response data to a JSON file."""
+    try:
+        # Create a unique filename using session_id and timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"llm_response_stream_{session_id}_{timestamp}.json"
+        
+        # Define a path to save the file, e.g., a 'response_logs' directory
+        log_dir = "response_logs"
+        os.makedirs(log_dir, exist_ok=True) # Ensure the directory exists
+        filepath = os.path.join(log_dir, filename)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(response_data, f, ensure_ascii=False, indent=4)
+        print(f"INFO: Successfully saved response to {filepath}")
+    except Exception as e:
+        print(f"ERROR: Failed to save response to JSON file: {e}")
+
 class InRequest(BaseModel):
     query: str
 
@@ -669,7 +687,7 @@ async def web_rag_mix(
             docs = [f"{article.get('title', '')} {article.get('description', '')}" for article in articles]
             links = [article.get('source_url') for article in articles]
         else:
-            docs, df, links = [], pd.DataFrame(), []
+            docs, df, links = [], None, []
 
         try:
             search_kwargs = {"k": 10}
@@ -783,6 +801,21 @@ async def web_rag_mix(
         }
         combined_data = {**links_data}
         await store_into_db(session_id,prompt_history_id,combined_data)
+
+        # Construct the final response object to be saved
+        final_response_to_save = {
+            "Response": aggregate.content if aggregate else "",
+            "links": links,
+            "Total_Tokens": token_data.get('total_tokens'),
+            "Prompt_Tokens": token_data.get('input_tokens'),
+            "Completion_Tokens": token_data.get('output_tokens'),
+            "session_id": session_id,
+            "prompt_history_id": prompt_history_id,
+            "query": query
+        }
+        # Save the final response to a JSON file
+        save_response_to_json(str(session_id), final_response_to_save)
+
         history = PostgresChatMessageHistory(
             str(session_id), psql_url
         )

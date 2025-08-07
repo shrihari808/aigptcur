@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 import psycopg2
+import json
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Any, List
@@ -79,6 +80,24 @@ llm1 = ChatOpenAI(temperature=0.5, model="gpt-4o-mini")
 llm_date = ChatOpenAI(temperature=0.5, model="gpt-4o-2024-05-13")
 
 # --- 2. Helper & Core Logic Functions ---
+
+def save_response_to_json(session_id: str, response_data: dict):
+    """Saves the LLM response data to a JSON file."""
+    try:
+        # Create a unique filename using session_id and timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"llm_response_{session_id}_{timestamp}.json"
+        
+        # Define a path to save the file, e.g., a 'response_logs' directory
+        log_dir = "response_logs"
+        os.makedirs(log_dir, exist_ok=True) # Ensure the directory exists
+        filepath = os.path.join(log_dir, filename)
+
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(response_data, f, ensure_ascii=False, indent=4)
+        print(f"INFO: Successfully saved response to {filepath}")
+    except Exception as e:
+        print(f"ERROR: Failed to save response to JSON file: {e}")
 
 def get_query_insights(query: str) -> dict:
     query_lower = query.lower()
@@ -210,12 +229,8 @@ async def web_rag(query: str, session_id: str):
             print("INFO: Web search found new articles. Re-running RAG chain.")
             insert_post1(df)
             
-            # **FIX: Run Pinecone ingestion as a background task without blocking.**
-            # The 'await' is removed from the sleep call, and we let the task run.
             pinecone_task = asyncio.create_task(data_into_pinecone(df))
-
-            # Allow a very brief moment for new data to be retrievable, but don't block.
-            asyncio.sleep(0.1) 
+            await asyncio.sleep(0.1) 
 
             all_relevant_docs = lotr.get_relevant_documents(user_q)
             passages = [{"text": doc.page_content, "metadata": doc.metadata} for doc in all_relevant_docs]
@@ -236,10 +251,6 @@ async def web_rag(query: str, session_id: str):
                 total_tokens += cb2.total_tokens
                 prompt_tokens += cb2.prompt_tokens
                 completion_tokens += cb2.completion_tokens
-            
-            # Ensure the background task is awaited before the function exits if needed,
-            # but for this API, we can let it complete in the background.
-            # await pinecone_task 
         else:
             print("WARN: Corrective web search found no new articles. Using initial response.")
         
@@ -256,14 +267,20 @@ async def web_rag(query: str, session_id: str):
     except Exception as history_error:
         print(f"WARN: Failed to save chat history: {history_error}")
 
-    return {
+    # Construct the final response object
+    final_response = {
         "Response": final_answer, "links": final_links, "Total_Tokens": total_tokens,
         "Prompt_Tokens": prompt_tokens, "Completion_Tokens": completion_tokens,
         "context_sufficiency_score": 0,
-        "num_sources_used": len(reranked_passages),
+        "num_sources_used": len(reranked_passages) if 'reranked_passages' in locals() else 0,
         "data_ingestion_triggered": data_ingestion_triggered,
-        "top_source_score": reranked_passages[0].get('final_combined_score', 0) if reranked_passages else 0
+        "top_source_score": reranked_passages[0].get('final_combined_score', 0) if 'reranked_passages' in locals() and reranked_passages else 0
     }
+
+    # Save the final response to a JSON file before returning
+    save_response_to_json(session_id, final_response)
+
+    return final_response
 
 # The adaptive_web_rag and web_rag_with_fallback functions can be copied from the previous version.
 async def web_rag_with_fallback(query: str, session_id: str):
