@@ -137,7 +137,7 @@ client=chroma_server_client
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 vs= Chroma(
     client=client,
-    collection_name="cmots_news",
+    collection_name="brave_scraped",
     embedding_function=embeddings,)
 
 vs_promoter= Chroma(

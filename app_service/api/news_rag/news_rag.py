@@ -278,7 +278,7 @@ async def web_rag(query: str, session_id: str):
     }
 
     # Save the final response to a JSON file before returning
-    save_response_to_json(session_id, final_response)
+    
 
     return final_response
 

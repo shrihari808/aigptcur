@@ -313,7 +313,8 @@ class NewsRagScoringService:
         for i, passage in enumerate(reranked_passages[:5]):
             print(f"  {i+1}. Score: {passage['final_combined_score']:.4f} | "
                   f"Rel: {passage['relevance_score']:.2f}, Sent: {passage['sentiment_score']:.2f}, "
-                  f"Time: {passage['time_decay_score']:.2f}, Impact: {passage['impact_score']:.2f}")
+                  f"Time: {passage['time_decay_score']:.2f}, Impact: {passage['impact_score']:.2f}"
+                  f"| {reranked_passages[i].get('metadata', {}).get('link', 'No link')}")
         
         return reranked_passages
 

@@ -669,44 +669,137 @@ async def web_rag_mix(
     ai_key_auth: str = Depends(authenticate_ai_key)
 ):
     query = request.query 
-    valid,v_tokens,m_chat,h_chat=await query_validate(query,session_id)
+    valid, v_tokens, m_chat, h_chat = await query_validate(query, session_id)
     
-    #print(valid)
     if valid == 0:
-        #pass
-        matched_docs,docs,memory_query,t_day,his, links= '', '', '', ''  ,'', []
+        matched_docs, docs, memory_query, t_day, his, links = '', '', '', '', '', []
     else:
-        memory_query=await memory_chain(query,m_chat)
-        #print(memory_query)
-        date,user_q,t_day=await llm_get_date(memory_query)
+        memory_query = await memory_chain(query, m_chat)
+        date, user_q, t_day = await llm_get_date(memory_query)
         
+        # Get web search results
         articles, df = await get_brave_results(memory_query)
         
         if articles and df is not None and not df.empty:
             insert_post1(df)
+            
+            # Upsert scraped data into Chroma collection
+            try:
+                from langchain.docstore.document import Document
+                
+                # Convert articles to Document objects for Chroma
+                documents_to_add = []
+                ids_to_add = []
+                
+                for i, article in enumerate(articles):
+                    # Create document content
+                    content = f"{article.get('title', '')} {article.get('description', '')}"
+                    
+                    # Create metadata
+                    metadata = {
+                        "title": article.get('title', ''),
+                        "link": article.get('source_url', ''),
+                        "snippet": article.get('description', ''),
+                        "publication_date": article.get('published_time', ''),
+                        "date": article.get('date', ''),
+                        "source": "brave_search"
+                    }
+                    
+                    # Create Document
+                    doc = Document(page_content=content, metadata=metadata)
+                    documents_to_add.append(doc)
+                    
+                    # Create unique ID (using URL hash or index-based)
+                    doc_id = f"brave_{hash(article.get('source_url', f'doc_{i}'))}"
+                    ids_to_add.append(doc_id)
+                
+                # Add documents to Chroma collection
+                vs.add_documents(documents=documents_to_add, ids=ids_to_add)
+                print(f"DEBUG: Successfully upserted {len(documents_to_add)} documents to brave_scraped collection")
+                
+            except Exception as e:
+                print(f"WARNING: Failed to upsert documents to Chroma: {e}")
+            
+            # Convert articles to passages format for scoring
+            web_passages = []
+            for article in articles:
+                web_passages.append({
+                    "text": f"{article.get('title', '')} {article.get('description', '')}",
+                    "metadata": {
+                        "title": article.get('title', ''),
+                        "link": article.get('source_url', ''),
+                        "snippet": article.get('description', ''),
+                        "publication_date": article.get('published_time', ''),
+                        "date": article.get('date', ''),
+                        "source": "brave_search"
+                    }
+                })
+            
             docs = [f"{article.get('title', '')} {article.get('description', '')}" for article in articles]
             links = [article.get('source_url') for article in articles]
+            print(f"DEBUG: Found {len(articles)} web articles for scoring")
         else:
-            docs, df, links = [], None, []
+            docs, df, links, web_passages = [], None, [], []
 
         try:
-            search_kwargs = {"k": 10}
+            # Check Chroma collection status
+            print(f"DEBUG: brave_scraped collection document count: {vs._collection.count()}")
+            
+            # Get documents from Chroma brave_scraped collection
+            chroma_passages = []
+            search_kwargs = {"k": 15}
             if date != 'None':
                 search_kwargs['filter'] = {"date": {"$gte": int(date)}}
+                print(f"DEBUG: Using date filter: {search_kwargs['filter']}")
             
-            results = vs.similarity_search_with_score(
-                memory_query,
-                **search_kwargs
-            )
-            matched_docs=[doc[0].page_content for doc in results]
+            print(f"DEBUG: Searching brave_scraped with query: '{memory_query}' and kwargs: {search_kwargs}")
+            results = vs.similarity_search_with_score(memory_query, **search_kwargs)
+            print(f"DEBUG: brave_scraped similarity search returned {len(results)} results")
+            
+            if not results and date != 'None':
+                print("DEBUG: No results from brave_scraped with date filter, trying without filter")
+                results = vs.similarity_search_with_score(memory_query, k=15)
+                print(f"DEBUG: brave_scraped search without date filter returned {len(results)} results")
+            
+            # Convert Chroma results to passages format
+            for i, (doc, score) in enumerate(results):
+                print(f"DEBUG: brave_scraped Document {i+1} - Score: {score:.4f}, Content length: {len(doc.page_content)}")
+                chroma_passages.append({
+                    "text": doc.page_content,
+                    "metadata": doc.metadata
+                })
+            
+            # Combine web and chroma passages
+            all_passages = web_passages + chroma_passages
+            print(f"DEBUG: Total passages for scoring: {len(all_passages)} (web: {len(web_passages)}, chroma: {len(chroma_passages)})")
+            
+            if all_passages:
+                # Import and use scoring service
+                from api.news_rag.scoring_service import scoring_service
+                
+                # Score and rerank all passages
+                reranked_passages = await scoring_service.score_and_rerank_passages(
+                    question=memory_query, 
+                    passages=all_passages
+                )
+                
+                # Create enhanced context
+                enhanced_context = scoring_service.create_enhanced_context(reranked_passages)
+                matched_docs = enhanced_context
+                
+                print(f"DEBUG: Used scoring service with {len(reranked_passages)} reranked passages")
+            else:
+                print("DEBUG: No passages available for scoring, using raw web content")
+                matched_docs = "\n\n".join(docs) if docs else ""
+            
         except Exception as e:
-            matched_docs = []
-            print(f"An error occurred during similarity search: {e}")
+            # Fallback to original logic if scoring fails
+            print(f"WARNING: Scoring service failed, falling back to simple content: {e}")
+            matched_docs = "\n\n".join(docs) if docs else ""
 
+        his = h_chat
 
-        his=h_chat
-
-        #Cmots Articles : {cmots}
+        # Cmots Articles : {cmots}
         res_prompt = """
         News Articles : {bing}
         chat history : {history}
@@ -714,7 +807,7 @@ async def web_rag_mix(
 
         use the date provided in the metadata to answer the user query if the user is asking in specific time periods.
         If the same question {input} present in chat_history ignore that answer present in chat history dont consider that answer while generating final answer.
-        give prority to latest date provided in metadata while answering user query.
+        give priority to latest date provided in metadata while answering user query.
         
         I am a financial markets super-assistant trained to function like Perplexity.ai — with enhanced domain intelligence and deep search comprehension.
         I am connected to a real-time web search + scraping engine that extracts live content from verified financial websites, regulatory portals, media publishers, and government sources.
@@ -740,67 +833,52 @@ async def web_rag_mix(
         2. **Break Down Complex Queries**: Decompose long or layered queries. Use intelligent reasoning to structure the answer.\n
         3. **Research Assistant Tone**: Neutral, professional, data-first. No assumptions, no opinions. Cite all key facts.\n
         4. **Source-Based**: Every metric or statement must include a credible source: (Source: [Link Title or Description](URL)).\n
-        5. **Fresh + Archived Data**: Always prioritize today’s/latest info. For long-term trends or legacy data, explicitly state the timeframe.\n
+        5. **Fresh + Archived Data**: Always prioritize today's/latest info. For long-term trends or legacy data, explicitly state the timeframe.\n
         6. **Answer Structuring**: Start with a concise summary. Use bullet points, tables, and subheadings.\n
         \n---\n
         STRICT LIMITATIONS:\n
         - Never make up data.\n
         - No financial advice, tips, or trading guidance.\n
-        - No generic phrases like “As an AI, I…”.\n
-        - No filler or irrelevant content — answer only the query’s intent.\n
+        - No generic phrases like "As an AI, I…".\n
+        - No filler or irrelevant content — answer only the query's intent.\n
         **DONT PROVIDE ANY EXTRA INFORMATION APART FROM USER QUESTION AND ANSWER SHOULD BE IN PROPER MARKDOWN FORMATTING**
         
         The user has asked the following question: {input}
-
-
-
-        
         """
 
         R_prompt = PromptTemplate(template=res_prompt, input_variables=["cmots","bing","input","date","history"])
-        ans_chain=R_prompt | llm_stream
+        ans_chain = R_prompt | llm_stream
 
-    
-    async def generate_chat_res(matched_docs,docs,query,t_day,history):
+    async def generate_chat_res(matched_docs, docs, query, t_day, history):
         if valid == 0:
-            # Stream "Not a valid question" if the query is invalid
-            
-            error_message = "The search query you're trying to use does not appear to be related to the Indian financial markets. Please ensure your query focuses on topics like finance, investing, stocks, or other related subjects to maintain platform quality. If your query is relevant but isn’t yielding the desired results, consider refining it to improve accuracy and alignment with financial market topics"
-            # Split the error message into smaller chunks
-            error_chunks = error_message.split('. ')  # You can choose a different delimiter if needed
+            error_message = "The search query you're trying to use does not appear to be related to the Indian financial markets. Please ensure your query focuses on topics like finance, investing, stocks, or other related subjects to maintain platform quality. If your query is relevant but isn't yielding the desired results, consider refining it to improve accuracy and alignment with financial market topics"
+            error_chunks = error_message.split('. ')
             
             for chunk in error_chunks:
-                yield chunk.encode("utf-8")  # Yield each chunk as bytes
-                await asyncio.sleep(1)  # Adjust the delay as needed for a smoother stream
+                yield chunk.encode("utf-8")
+                await asyncio.sleep(1)
                 
             return
         
         aggregate = None
         async for chunk in ans_chain.astream({"cmots": matched_docs,"bing":docs,"input": query,"date":t_day,"history":his}):
-            #return chunk
-            
             if chunk is not None:
-                #print(type(chunk))
                 answer = chunk.content
                 aggregate = chunk if aggregate is None else aggregate + chunk
                 if answer is not None:
                     await asyncio.sleep(0.01) 
                     yield answer.encode("utf-8")
-                else:
-                    pass
             else:
                 print("Received None chunk")
 
-        token_data=aggregate.usage_metadata
-        total_tokens=token_data['total_tokens']/1000 +3 
+        token_data = aggregate.usage_metadata
+        total_tokens = token_data['total_tokens']/1000 + 3 
 
-        await insert_credit_usage(user_id,plan_id,total_tokens)
+        await insert_credit_usage(user_id, plan_id, total_tokens)
 
-        links_data = {
-            "links": links
-        }
+        links_data = {"links": links}
         combined_data = {**links_data}
-        await store_into_db(session_id,prompt_history_id,combined_data)
+        await store_into_db(session_id, prompt_history_id, combined_data)
 
         # Construct the final response object to be saved
         final_response_to_save = {
@@ -816,18 +894,11 @@ async def web_rag_mix(
         # Save the final response to a JSON file
         save_response_to_json(str(session_id), final_response_to_save)
 
-        history = PostgresChatMessageHistory(
-            str(session_id), psql_url
-        )
-
-
-
+        history = PostgresChatMessageHistory(str(session_id), psql_url)
         history.add_user_message(memory_query)
         history.add_ai_message(aggregate)
 
-
-    return StreamingResponse(generate_chat_res(matched_docs,docs,memory_query,t_day,his), media_type="text/event-stream")
-
+    return StreamingResponse(generate_chat_res(matched_docs, docs, memory_query, t_day, his), media_type="text/event-stream")
 
 @red_rag.post("/reddit_rag")
 async def red_rag_bing(
