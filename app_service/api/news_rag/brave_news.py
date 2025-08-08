@@ -1,3 +1,5 @@
+# /aigptcur/app_service/api/news_rag/brave_news.py
+
 import os
 import json
 import asyncio
@@ -42,7 +44,10 @@ pg_ip = os.getenv('PG_IP_ADDRESS')
 psql_url = os.getenv('DATABASE_URL')
 
 class BraveNews:
-    """Enhanced Brave Search implementation for news with PostgreSQL integration."""
+    """
+    A refactored class to handle Brave Search API interactions, web scraping,
+    and data processing in a structured way.
+    """
     
     BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1/web/search"
     
@@ -82,15 +87,14 @@ class BraveNews:
         extracted_data = []
         web_results = brave_results.get('web', {}).get('results', [])
         news_results = brave_results.get('news', {}).get('results', [])
-
-        # **FIX: Combine all results and process them without a restrictive domain filter.**
+        
         all_results = web_results + news_results
         
         for item in all_results:
             pub_date = item.get("page_age")
             if pub_date:
                 try:
-                    # Ensure it's a valid ISO format date
+                    # Ensure it's a valid ISO format date by handling the 'Z'
                     datetime.fromisoformat(pub_date.replace('Z', '+00:00'))
                 except (ValueError, TypeError):
                     pub_date = None
@@ -225,26 +229,39 @@ class BraveNews:
             return df
         return pd.DataFrame()
 
-# ... (Database and Pinecone functions remain the same) ...
-async def insert_post(df: pd.DataFrame):
-    db_url = psql_url
-    conn = None
+# --- Standalone Functions ---
+
+async def get_brave_results(query: str):
+    """
+    High-level function to search Brave, scrape results, and return articles and a DataFrame.
+    This is the main entry point for other modules.
+    """
+    brave_api_key = os.getenv('BRAVE_API_KEY')
+    if not brave_api_key:
+        print("ERROR: BRAVE_API_KEY not found in environment variables.")
+        return None, None
+    
+    searcher = BraveNews(brave_api_key)
     try:
-        conn = await asyncpg.connect(db_url)
-        for index, row in df.iterrows():
-            exists = await conn.fetchval("SELECT 1 FROM source_data WHERE source_url = $1", row['source_url'])
-            if not exists:
-                await conn.execute("""
-                    INSERT INTO source_data (source_url, image_url, heading, title, description, source_date)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                """, row['source_url'], row.get('image_url'), row['heading'], row['title'], row['description'], row['source_date'])
+        processed_items = await searcher.search_and_scrape(query)
+        if not processed_items:
+            print(f"DEBUG: No processed items returned from search_and_scrape for query: '{query}'")
+            return None, None
+        
+        df = searcher._process_for_dataframe(processed_items)
+        if df.empty:
+            print(f"DEBUG: DataFrame is empty after processing for query: '{query}'")
+            return None, None
+        
+        # The 'articles' should be a list of dictionaries, which is what df.to_dict('records') provides
+        articles = df.to_dict('records')
+        return articles, df
     except Exception as e:
-        print(f"Error inserting into PostgreSQL: {e}")
-    finally:
-        if conn:
-            await conn.close()
+        print(f"Error in get_brave_results: {str(e)}")
+        return None, None
 
 def insert_post1(df: pd.DataFrame):
+    """Synchronous function to insert DataFrame into PostgreSQL."""
     db_url = psql_url
     conn = None
     cur = None
@@ -260,6 +277,7 @@ def insert_post1(df: pd.DataFrame):
                 """)
                 cur.execute(insert_query, (row['source_url'], row.get('image_url'), row['heading'], row['title'], row['description'], row['source_date']))
         conn.commit()
+        print("DEBUG: Sources inserted into source_data table")
     except Exception as e:
         print(f"Error inserting into PostgreSQL (sync): {e}")
     finally:
@@ -267,6 +285,7 @@ def insert_post1(df: pd.DataFrame):
         if conn: conn.close()
 
 def initialize_pinecone():
+    """Initializes and returns a Pinecone client and index name."""
     pc = PineconeClient(api_key=os.getenv("PINECONE_API_KEY"))
     index_name = "bing-news"
     if index_name not in pc.list_indexes().names():
@@ -277,6 +296,7 @@ def initialize_pinecone():
     return pc, index_name
 
 async def data_into_pinecone(df):
+    """Asynchronously prepares and upserts data into Pinecone."""
     pc, index_name = initialize_pinecone()
     embeddings = OpenAIEmbeddings()
     documents = []
@@ -291,30 +311,10 @@ async def data_into_pinecone(df):
         ids.append(doc_id)
     
     if documents:
+        # Note: from_documents is a synchronous call, but we call it from an async function.
+        # For true async upsert, you would use Pinecone's async client directly.
         PineconeVectorStore.from_documents(
             documents=documents, embedding=embeddings, index_name=index_name,
             namespace="bing", ids=ids
         )
     return "Inserted!"
-
-async def get_brave_results(query):
-    brave_api_key = os.getenv('BRAVE_API_KEY')
-    if not brave_api_key:
-        print("ERROR: BRAVE_API_KEY not found")
-        return None, None
-    
-    searcher = BraveNews(brave_api_key)
-    try:
-        processed_items = await searcher.search_and_scrape(query)
-        if not processed_items:
-            return None, None
-        
-        df = searcher._process_for_dataframe(processed_items)
-        if df.empty:
-            return None, None
-        
-        filtered_articles = df.to_dict('records')
-        return filtered_articles, df
-    except Exception as e:
-        print(f"Error in get_brave_results: {str(e)}")
-        return None, None

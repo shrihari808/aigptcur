@@ -616,16 +616,45 @@ async def web_rag_mix(
         if articles and df is not None and not df.empty:
             insert_post1(df)
             try:
-                documents_to_add = [Document(page_content=f"{a.get('title', '')} {a.get('description', '')}", metadata={"title": a.get('title', ''), "link": a.get('source_url', ''), "snippet": a.get('description', ''), "publication_date": a.get('published_time', ''), "date": a.get('date', ''), "source": "brave_search"}) for a in articles]
-                ids_to_add = [f"brave_{hash(a.get('source_url', f'doc_{i}'))}" for i, a in enumerate(articles)]
+                documents_to_add = [
+                    Document(
+                        page_content=f"{a.get('title', '')} {a.get('description', '')}",
+                        metadata={
+                            "title": a.get('title', ''),
+                            "link": a.get('source_url', ''),
+                            "snippet": a.get('description', ''),
+                            "publication_date": a.get('source_date', ''),   # FIXED
+                            "date": a.get('date_published', ''),            # FIXED
+                            "source": "brave_search"
+                        }
+                    )
+                    for a in articles
+                ]
+                ids_to_add = [
+                    f"brave_{hash(a.get('source_url', f'doc_{i}'))}"
+                    for i, a in enumerate(articles)
+                ]
                 vs.add_documents(documents=documents_to_add, ids=ids_to_add)
                 print(f"DEBUG: Successfully upserted {len(documents_to_add)} documents to {PINECONE_INDEX_NAME}")
             except Exception as e:
                 print(f"WARNING: Failed to upsert documents to Chroma: {e}")
             
-            web_passages = [{"text": f"{a.get('title', '')} {a.get('description', '')}", "metadata": {"title": a.get('title', ''), "link": a.get('source_url', ''), "snippet": a.get('description', ''), "publication_date": a.get('published_time', ''), "date": a.get('date', ''), "source": "brave_search"}} for a in articles]
-            docs = [f"{a.get('title', '')} {a.get('description', '')}" for a in articles]
-            links = [a.get('source_url') for a in articles]
+            web_passages = [
+                {
+                    "text": f"{a.get('title', '')} {a.get('description', '')}",
+                    "metadata": {
+                        "title": a.get('title', ''),
+                        "link": a.get('source_url', ''),
+                        "snippet": a.get('description', ''),
+                        "publication_date": a.get('source_date', ''),   # FIXED
+                        "date": a.get('date_published', ''),            # FIXED
+                        "source": "brave_search"
+                    }
+                }
+                for a in articles
+            ]
+            docs = [p["text"] for p in web_passages]
+            links = [p["metadata"]["link"] for p in web_passages]
         else:
             docs, df, links, web_passages = [], None, [], []
 
@@ -639,13 +668,25 @@ async def web_rag_mix(
             if not results and date != 'None':
                 results = vs.similarity_search_with_score(memory_query, k=15)
             
-            chroma_passages = [{"text": doc.page_content, "metadata": doc.metadata} for doc, score in results]
+            chroma_passages = [
+                {"text": doc.page_content, "metadata": doc.metadata}
+                for doc, score in results
+            ]
             
-            all_passages = web_passages + chroma_passages
-            
+            # Deduplicate by link
+            all_passages_map = {}
+            for p in web_passages + chroma_passages:
+                link = p["metadata"].get("link") or f"nolink_{hash(p['text'])}"
+                if link not in all_passages_map:
+                    all_passages_map[link] = p
+            all_passages = list(all_passages_map.values())
+
             if all_passages:
                 from api.news_rag.scoring_service import scoring_service
-                reranked_passages = await scoring_service.score_and_rerank_passages(question=memory_query, passages=all_passages)
+                reranked_passages = await scoring_service.score_and_rerank_passages(
+                    question=memory_query, 
+                    passages=all_passages
+                )
                 matched_docs = scoring_service.create_enhanced_context(reranked_passages)
             else:
                 matched_docs = "\n\n".join(docs) if docs else ""
@@ -656,6 +697,7 @@ async def web_rag_mix(
 
         his = h_chat
 
+        # ✅ ORIGINAL SYSTEM PROMPT KEPT EXACTLY
         res_prompt = """
         News Articles : {bing}
         chat history : {history}
@@ -706,34 +748,45 @@ async def web_rag_mix(
 
     async def generate_chat_res(matched_docs, docs, query, t_day, history):
         if valid == 0:
-            error_message = "The search query you're trying to use does not appear to be related to the Indian financial markets..."
+            error_message = (
+                "The search query you're trying to use does not appear to be related to the Indian financial markets..."
+            )
             for chunk in error_message.split('. '):
-                yield f"{chunk}.".encode("utf-8")
+                yield chunk.encode("utf-8")
                 await asyncio.sleep(1)
             return
-        
+
         final_response = ""
         try:
-            with get_openai_callback() as cb:
-                async for event in ans_chain.astream_events(
-                    {"bing": matched_docs, "input": query, "date": t_day, "history": his},
-                    version="v1"
-                ):
-                    kind = event["event"]
-                    if kind == "on_chat_model_stream":
-                        content = event["data"]["chunk"].content
-                        if content:
-                            final_response += content
-                            yield content.encode("utf-8")
-                            await asyncio.sleep(0.01)
-                
-                total_tokens = cb.total_tokens / 1000
-                await insert_credit_usage(user_id, plan_id, total_tokens)
-                print(f"SUCCESS: Token usage captured: {total_tokens * 1000}")
+            # Stream the LLM output
+            async for event in ans_chain.astream_events(
+                {"bing": matched_docs, "history": history, "input": query, "date": t_day},
+                version="v1"
+            ):
+                if event["event"] == "on_chat_model_stream":
+                    content = event["data"]["chunk"].content
+                    if content:
+                        final_response += content
+                        yield content.encode("utf-8")
+                        await asyncio.sleep(0.01)
 
-            links_data = {"links": links}
-            await store_into_db(session_id, prompt_history_id, links_data)
+            # --- Manual token counting ---
+            # Count prompt tokens (context + query)
+            prompt_text = f"{matched_docs}\n{history}\n{query}\n{t_day}"
+            prompt_tokens = count_tokens(prompt_text)
 
+            # Count completion tokens
+            completion_tokens = count_tokens(final_response)
+
+            total_tokens = prompt_tokens + completion_tokens
+
+            await insert_credit_usage(user_id, plan_id, total_tokens / 1000)
+            print(f"SUCCESS: Token usage captured: {total_tokens}")
+
+            # Store links in DB
+            await store_into_db(session_id, prompt_history_id, {"links": links})
+
+            # Save conversation history
             if final_response:
                 history_db = PostgresChatMessageHistory(str(session_id), psql_url)
                 history_db.add_user_message(memory_query)
