@@ -637,7 +637,7 @@ async def web_rag_mix(
                 vs.add_documents(documents=documents_to_add, ids=ids_to_add)
                 print(f"DEBUG: Successfully upserted {len(documents_to_add)} documents to {PINECONE_INDEX_NAME}")
             except Exception as e:
-                print(f"WARNING: Failed to upsert documents to Chroma: {e}")
+                print(f"WARNING: Failed to upsert documents to Pinecone: {e}")
             
             web_passages = [
                 {
@@ -659,7 +659,7 @@ async def web_rag_mix(
             docs, df, links, web_passages = [], None, [], []
 
         try:
-            chroma_passages = []
+            pinecone_passages = []
             search_kwargs = {"k": 15}
             if date != 'None':
                 search_kwargs['filter'] = {"date": {"$gte": int(date)}}
@@ -668,14 +668,14 @@ async def web_rag_mix(
             if not results and date != 'None':
                 results = vs.similarity_search_with_score(memory_query, k=15)
             
-            chroma_passages = [
+            pinecone_passages = [
                 {"text": doc.page_content, "metadata": doc.metadata}
                 for doc, score in results
             ]
             
             # Deduplicate by link
             all_passages_map = {}
-            for p in web_passages + chroma_passages:
+            for p in web_passages + pinecone_passages:
                 link = p["metadata"].get("link") or f"nolink_{hash(p['text'])}"
                 if link not in all_passages_map:
                     all_passages_map[link] = p
