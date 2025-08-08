@@ -41,7 +41,7 @@ load_dotenv()
 pg_ip = os.getenv('PG_IP_ADDRESS')
 psql_url = os.getenv('DATABASE_URL')
 
-class BraveNewsSearcher:
+class BraveNews:
     """Enhanced Brave Search implementation for news with PostgreSQL integration."""
     
     BRAVE_API_BASE_URL = "https://api.search.brave.com/res/v1/web/search"
@@ -303,7 +303,7 @@ async def get_brave_results(query):
         print("ERROR: BRAVE_API_KEY not found")
         return None, None
     
-    searcher = BraveNewsSearcher(brave_api_key)
+    searcher = BraveNews(brave_api_key)
     try:
         processed_items = await searcher.search_and_scrape(query)
         if not processed_items:

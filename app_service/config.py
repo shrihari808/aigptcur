@@ -17,6 +17,8 @@ try:
 except Exception as e:
     print(f"ERROR: Could not load .env file in config.py: {e}")
 
+from pinecone import ServerlessSpec, Pinecone
+from langchain_pinecone import PineconeVectorStore
 
 import chromadb
 import tiktoken
@@ -179,16 +181,41 @@ else:
     llm_date = ChatOpenAI(temperature=0.3, model="gpt-4o-2024-05-13")
     llm_screener = ChatOpenAI(temperature=0.5, model='gpt-4o-mini')
 
-# --- ChromaDB Vector Store Initialization ---
-client = chroma_server_client
-vs = Chroma(
-    client=client,
-    collection_name="brave_scraped",
-    embedding_function=embeddings,
+# --- Pinecone Vector Store Initialization ---
+if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
+    raise ValueError("PINECONE_API_KEY and PINECONE_ENVIRONMENT environment variables must be set")
+
+# Initialize Pinecone client
+pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+index_name = "market-data-index"  # change if desired
+
+if not pinecone_client.has_index(index_name):
+    pinecone_client.create_index(
+        name=index_name,
+        dimension=1536,
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+    )
+# Initialize LangChain's Pinecone vector store.
+# This 'vs' object can be imported and used across the application.
+vs = PineconeVectorStore(
+    index=PINECONE_INDEX_NAME,
+    embedding=embeddings
 )
 
+print("INFO: Pinecone vector store initialized.")
+
+
+# # --- ChromaDB Vector Store Initialization ---
+# client = chroma_server_client
+# vs = Chroma(
+#     client=client,
+#     collection_name="brave_scraped",
+#     embedding_function=embeddings,
+# )
+
 vs_promoter = Chroma(
-    client=client,
+    client=chroma_server_client,
     collection_name="promoters_202409",
     embedding_function=embeddings,
 )

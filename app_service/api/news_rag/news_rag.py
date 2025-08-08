@@ -1,295 +1,167 @@
 import os
 import time
-import asyncio
-import psycopg2
-import json
-from datetime import datetime
-from dotenv import load_dotenv
-from typing import Any, List
-
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI, AzureOpenAIEmbeddings, AzureChatOpenAI
-from langchain_groq import ChatGroq
-from langchain_pinecone import PineconeVectorStore
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from pinecone import Pinecone
+from app_service.api.news_rag.brave_news import BraveNews
+from langchain_community.vectorstores import Pinecone as PineconeVectors
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
-from langchain_postgres import PostgresChatMessageHistory
-from langchain.retrievers import MergerRetriever
-from langchain_community.callbacks import get_openai_callback
-from langchain_chroma import Chroma
-
-from pinecone import Pinecone as PineconeClient, ServerlessSpec
-
-from api.news_rag.brave_news import get_brave_results, insert_post1, data_into_pinecone
-from api.news_rag.scoring_service import scoring_service
-from config import (
-    chroma_server_client,
-    CONTEXT_SUFFICIENCY_THRESHOLD,
-    W_RELEVANCE,
-    W_SENTIMENT,
-    W_TIME_DECAY,
-    W_IMPACT
-)
+from langchain_core.runnables import RunnablePassthrough
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import RecursiveUrlLoader
+from langchain.docstore.document import Document
+from dotenv import load_dotenv
 
 load_dotenv()
 
-async def cmots_only():
-    pass
 
-# --- 1. Centralized Configuration & Initialization ---
+class NewsRag:
+    def __init__(self, query: str):
+        """
+        Initializes the NewsRag object.
+        Args:
+            query (str): The user's query.
+        """
+        self.query = query
+        self.llm = ChatOpenAI(model_name="gpt-4-turbo-preview", temperature=0)
+        self.embedding_model = OpenAIEmbeddings(model="text-embedding-3-large")
+        self.pinecone_index_name = "market-data-index"
 
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-PINECONE_API_KEY = os.getenv('PINECONE_API_KEY')
-PINECONE_ENVIRONMENT = os.getenv('PINECONE_ENVIRONMENT', 'us-east-1')
-GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-PSQL_URL = os.getenv('DATABASE_URL')
-
-if not all([PINECONE_API_KEY, PINECONE_ENVIRONMENT]):
-    raise ValueError("FATAL: Missing Pinecone configuration.")
-
-NEWS_RAG_INDEX_NAME = "newsrag11052024"
-BING_NEWS_INDEX_NAME = "bing-news"
-PINECONE_INDEX_DIMENSION = 1536
-
-def initialize_pinecone_index(client: PineconeClient, index_name: str, dimension: int, cloud_region: str):
-    if index_name not in client.list_indexes().names():
-        client.create_index(
-            name=index_name, dimension=dimension, metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region=cloud_region)
-        )
-        time.sleep(10)
-
-try:
-    pinecone_client = PineconeClient(api_key=PINECONE_API_KEY)
-    initialize_pinecone_index(pinecone_client, NEWS_RAG_INDEX_NAME, PINECONE_INDEX_DIMENSION, PINECONE_ENVIRONMENT)
-    initialize_pinecone_index(pinecone_client, BING_NEWS_INDEX_NAME, PINECONE_INDEX_DIMENSION, PINECONE_ENVIRONMENT)
-except Exception as e:
-    raise e
-
-embeddings = AzureOpenAIEmbeddings(model="text-embedding-3-small")
-news_rag_vectorstore = PineconeVectorStore(index_name=NEWS_RAG_INDEX_NAME, embedding=embeddings, namespace='news')
-brave_news_vectorstore = PineconeVectorStore(index_name=BING_NEWS_INDEX_NAME, embedding=embeddings, namespace='bing')
-cmots_vectorstore = Chroma(
-    client=chroma_server_client,
-    collection_name="cmots_news",
-    embedding_function=embeddings,
-)
-
-llm1 = ChatOpenAI(temperature=0.5, model="gpt-4o-mini")
-llm_date = ChatOpenAI(temperature=0.5, model="gpt-4o-2024-05-13")
-
-# --- 2. Helper & Core Logic Functions ---
-
-def save_response_to_json(session_id: str, response_data: dict):
-    """Saves the LLM response data to a JSON file."""
-    try:
-        # Create a unique filename using session_id and timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"llm_response_{session_id}_{timestamp}.json"
+        # Initialize Pinecone client using v3 style
+        PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+        PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
+        if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
+            raise ValueError("PINECONE_API_KEY and PINECONE_ENVIRONMENT environment variables must be set")
         
-        # Define a path to save the file, e.g., a 'response_logs' directory
-        log_dir = "response_logs"
-        os.makedirs(log_dir, exist_ok=True) # Ensure the directory exists
-        filepath = os.path.join(log_dir, filename)
+        self.pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+        self.index = self.pinecone_client.Index(self.pinecone_index_name)
 
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(response_data, f, ensure_ascii=False, indent=4)
-        print(f"INFO: Successfully saved response to {filepath}")
-    except Exception as e:
-        print(f"ERROR: Failed to save response to JSON file: {e}")
+        self.urls = self._get_urls()
+        self.docs = self._load_documents()
+        self.splits = self._split_documents()
+        self.retriever = self._get_retriever()
 
-def get_query_insights(query: str) -> dict:
-    query_lower = query.lower()
-    insights = {
-        "recency_focused": any(keyword in query_lower for keyword in ['latest', 'recent', 'today', 'current', 'new', 'now'])
-    }
-    return insights
+    def _get_urls(self):
+        """
+        Gets URLs from Brave search based on the query.
+        Returns:
+            list: A list of URLs.
+        """
+        brave_news = BraveNews(self.query)
+        return brave_news.get_urls()
 
-def split_input(input_string: str):
-    parts = input_string.split(',', 1)
-    return parts[0].strip(), parts[1].strip() if len(parts) > 1 else ""
+    def _load_documents(self):
+        """
+        Loads documents from the URLs.
+        Returns:
+            list: A list of loaded documents.
+        """
+        all_docs = []
+        for url in self.urls:
+            try:
+                loader = RecursiveUrlLoader(url=url, max_depth=2)
+                docs = loader.load()
+                all_docs.extend(docs)
+            except Exception as e:
+                print(f"Error loading url {url}: {e}")
+        return all_docs
 
-def llm_get_date(user_query: str):
-    today = datetime.now().strftime("%Y-%m-%d")
-    prompt = ChatPromptTemplate.from_template(
-        "Today's date is {today}. User query: \"{user_query}\". "
-        "Determine the target date. If 'today' or 'latest', use today. "
-        "If 'recently', use 7 days ago. For specific past dates, use that date. "
-        "If no date or future date, output 'None'. "
-        "Also, remove time-related words from the query. "
-        "Format output ONLY as: YYYYMMDD,modified_user_query"
-    )
-    chain = prompt | llm_date
-    response = chain.invoke({"today": today, "user_query": user_query}).content
-    return split_input(response) + (today,)
+    def _split_documents(self):
+        """
+        Splits the documents into smaller chunks.
+        Returns:
+            list: A list of document splits.
+        """
+        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        return text_splitter.split_documents(self.docs)
 
-def memory_chain(query: str, session_id: str):
-    try:
-        connection = psycopg2.connect(PSQL_URL)
-        cursor = connection.cursor()
-        cursor.execute("SELECT message FROM message_store WHERE session_id = %s ORDER BY id DESC LIMIT 6", (session_id,))
-        rows = cursor.fetchall()
-        cursor.close()
-        connection.close()
-        chat_history = "\n".join([row[0] for row in reversed(rows)])
-    except Exception as e:
-        chat_history = ""
-    if not chat_history:
-        return query
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", "Given the chat history and a follow-up question, rephrase it to be a standalone question."),
-        ("human", "Chat History:\n{chat_history}\n\nFollow-up Question: {question}")
-    ])
-    chain = prompt | ChatOpenAI(model="gpt-4o-mini", temperature=0)
-    return chain.invoke({"chat_history": chat_history, "question": query}).content
+    def _get_retriever(self):
+        """
+        Creates a retriever from the document splits using Pinecone.
+        It upserts the documents to the Pinecone index and waits for them to be indexed.
+        Returns:
+            A Pinecone retriever object.
+        """
+        print(f"Number of splits to be upserted: {len(self.splits)}")
+        if not self.splits:
+            # Return a retriever from an empty list of docs if no splits
+            return PineconeVectors.from_documents([], self.embedding_model, index_name=self.pinecone_index_name).as_retriever()
 
-def is_response_insufficient(response_text: str) -> bool:
-    """
-    Checks if the LLM response is too short or indicates a lack of information.
-    """
-    if len(response_text) < 150: # Reduced threshold slightly
-        return True
-    
-    insufficient_phrases = [
-        "cannot find the information", "no recent financial news",
-        "context provided does not contain", "unable to provide",
-        "no information available", "based on the context provided, there is no"
-    ]
-    
-    lower_response = response_text.lower()
-    for phrase in insufficient_phrases:
-        if phrase in lower_response:
-            return True
-            
-    return False
-
-async def web_rag(query: str, session_id: str):
-    """
-    Performs a two-pass RAG query. 
-    Pass 1 uses existing data. 
-    Pass 2 triggers a web search if the first pass response is insufficient.
-    """
-    memory_query = memory_chain(query, session_id)
-    date, user_q, t_day = llm_get_date(memory_query)
-
-    search_kwargs = {"k": 15}
-    if date != "None":
-        search_kwargs['filter'] = {'date': {'$gte': int(date)}}
-
-    retriever_cmots = cmots_vectorstore.as_retriever(search_kwargs=search_kwargs)
-    retriever_brave = brave_news_vectorstore.as_retriever(search_kwargs=search_kwargs)
-    lotr = MergerRetriever(retrievers=[retriever_cmots, retriever_brave])
-
-    # --- Pass 1: Initial attempt with existing data ---
-    print("INFO: Pass 1 - Attempting to answer using existing knowledge.")
-    initial_docs = lotr.get_relevant_documents(user_q)
-    
-    passages = [{"text": doc.page_content, "metadata": doc.metadata} for doc in initial_docs]
-    reranked_passages = await scoring_service.score_and_rerank_passages(
-        question=user_q, passages=passages
-    )
-    enhanced_context = scoring_service.create_enhanced_context(reranked_passages)
-
-    res_prompt_template = """You are an advanced financial markets AI assistant. Today's date is {date}.
-    Based ONLY on the context provided below, answer the user's question.
-    If the context is empty or insufficient, state that you cannot find the information in the provided articles.
-    Context:
-    {context}
-    User Question: {input}
-    Format your output as a single JSON object with "answer" and "links" keys.
-    """
-    R_prompt = ChatPromptTemplate.from_template(res_prompt_template)
-    output_parser = JsonOutputParser()
-    response_chain = R_prompt | llm1 | output_parser
-
-    with get_openai_callback() as cb:
+        # 1. Get the vector count before upserting
         try:
-            first_pass_response = response_chain.invoke({"context": enhanced_context, "input": user_q, "date": t_day})
-            final_answer = first_pass_response.get('answer', "")
-            final_links = first_pass_response.get('links', [])
-        except Exception:
-            final_answer = ""
-            final_links = []
-    
-    total_tokens = cb.total_tokens
-    prompt_tokens = cb.prompt_tokens
-    completion_tokens = cb.completion_tokens
-    data_ingestion_triggered = False
-
-    # --- Self-Correction Quality Check ---
-    if is_response_insufficient(final_answer):
-        print("INFO: First-pass response is insufficient. Triggering corrective web search (Pass 2).")
-        data_ingestion_triggered = True
+            initial_vector_count = self.index.describe_index_stats()['total_vector_count']
+        except Exception as e:
+            print(f"Error describing index stats: {e}")
+            initial_vector_count = 0
         
-        articles, df = await get_brave_results(query)
+        print(f"Initial vector count: {initial_vector_count}")
+
+        # 2. Upsert documents to Pinecone
+        # Langchain's Pinecone vector store will use the environment variables for its own client instance
+        vectorstore = PineconeVectors.from_documents(
+            documents=self.splits,
+            embedding=self.embedding_model,
+            index_name=self.pinecone_index_name
+        )
         
-        if articles and df is not None and not df.empty:
-            print("INFO: Web search found new articles. Re-running RAG chain.")
-            insert_post1(df)
-            
-            pinecone_task = asyncio.create_task(data_into_pinecone(df))
-            await asyncio.sleep(0.1) 
+        print("Upsert operation completed.")
 
-            all_relevant_docs = lotr.get_relevant_documents(user_q)
-            passages = [{"text": doc.page_content, "metadata": doc.metadata} for doc in all_relevant_docs]
-            reranked_passages = await scoring_service.score_and_rerank_passages(
-                question=user_q, passages=passages
-            )
-            enhanced_context = scoring_service.create_enhanced_context(reranked_passages)
-
-            with get_openai_callback() as cb2:
-                try:
-                    second_pass_response = response_chain.invoke({"context": enhanced_context, "input": user_q, "date": t_day})
-                    final_answer = second_pass_response.get('answer', "Failed to generate a refined answer.")
-                    final_links = second_pass_response.get('links', [])
-                except Exception as e:
-                    final_answer = "I found new information but encountered an error while processing it."
-                    final_links = [p.get('metadata', {}).get('link') for p in reranked_passages[:5] if p.get('metadata', {}).get('link')]
-
-                total_tokens += cb2.total_tokens
-                prompt_tokens += cb2.prompt_tokens
-                completion_tokens += cb2.completion_tokens
+        # 3. Wait for the vectors to be indexed
+        expected_count = initial_vector_count + len(self.splits)
+        timeout = 60  # seconds
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                current_vector_count = self.index.describe_index_stats()['total_vector_count']
+                print(f"Current vector count: {current_vector_count}, Expected: ~{expected_count}")
+                if current_vector_count >= expected_count:
+                    print("Vectors are indexed.")
+                    break
+            except Exception as e:
+                print(f"Could not get vector count, retrying... Error: {e}")
+            time.sleep(5) # Check every 5 seconds
         else:
-            print("WARN: Corrective web search found no new articles. Using initial response.")
-        
-        if is_response_insufficient(final_answer):
-            print("WARN: Second pass also resulted in an insufficient answer. Returning a user-friendly message.")
-            final_answer = f"I searched for recent information about '{query}' but could not find any specific articles to provide a detailed answer. Please try rephrasing your query or asking about a different topic."
-            final_links = []
+            print("Timeout reached while waiting for vectors to be indexed.")
 
-    # --- Final Response and History Logging ---
-    try:
-        history = PostgresChatMessageHistory(connection_string=PSQL_URL, session_id=session_id)
-        history.add_user_message(memory_query)
-        history.add_ai_message(final_answer)
-    except Exception as history_error:
-        print(f"WARN: Failed to save chat history: {history_error}")
+        return vectorstore.as_retriever()
 
-    # Construct the final response object
-    final_response = {
-        "Response": final_answer, "links": final_links, "Total_Tokens": total_tokens,
-        "Prompt_Tokens": prompt_tokens, "Completion_Tokens": completion_tokens,
-        "context_sufficiency_score": 0,
-        "num_sources_used": len(reranked_passages) if 'reranked_passages' in locals() else 0,
-        "data_ingestion_triggered": data_ingestion_triggered,
-        "top_source_score": reranked_passages[0].get('final_combined_score', 0) if 'reranked_passages' in locals() and reranked_passages else 0
-    }
+    def get_rag_chain(self):
+        """
+        Creates and returns the RAG chain.
+        Returns:
+            A RAG chain object.
+        """
+        template = """Answer the question based only on the following context:
+        {context}
 
-    # Save the final response to a JSON file before returning
-    
+        Question: {question}
+        """
+        prompt = ChatPromptTemplate.from_template(template)
 
-    return final_response
+        rag_chain = (
+            {"context": self.retriever, "question": RunnablePassthrough()}
+            | prompt
+            | self.llm
+        )
+        return rag_chain
 
-# The adaptive_web_rag and web_rag_with_fallback functions can be copied from the previous version.
-async def web_rag_with_fallback(query: str, session_id: str):
-    try:
-        return await web_rag(query, session_id)
-    except Exception as brave_error:
-        print(f"ERROR: Brave-based web_rag failed: {brave_error}")
-        return { "Response": "I apologize, but the search system is currently unavailable.", "links": [], "error": str(brave_error) }
 
-async def adaptive_web_rag(query: str, session_id: str):
-    # This function can be implemented similarly to the main web_rag but using custom weights from get_query_insights
-    return await web_rag(query, session_id) # Fallback to standard for now
+def web_rag(query: str):
+    """
+    The main function for the web RAG.
+    Args:
+        query (str): The user's query.
+    Returns:
+        The response from the RAG chain.
+    """
+    news_rag_instance = NewsRag(query)
+    rag_chain = news_rag_instance.get_rag_chain()
+    result = rag_chain.invoke(query)
+    return result
+
+def cmots_only(query: str):
+    """
+    Placeholder function to resolve import error.
+    """
+    print("cmots_only function is not implemented.")
+    return "This feature is not available."
