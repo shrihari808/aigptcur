@@ -182,26 +182,23 @@ else:
     llm_screener = ChatOpenAI(temperature=0.5, model='gpt-4o-mini')
 
 # --- Pinecone Vector Store Initialization ---
-if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
-    raise ValueError("PINECONE_API_KEY and PINECONE_ENVIRONMENT environment variables must be set")
+if not PINECONE_API_KEY:
+    raise ValueError("PINECONE_API_KEY environment variable must be set")
 
 # Initialize Pinecone client
-pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
+pinecone_client = Pinecone(api_key=PINECONE_API_KEY)
 index_name = "market-data-index"  # change if desired
 
-if not pinecone_client.has_index(index_name):
+if index_name not in pinecone_client.list_indexes().names():
     pinecone_client.create_index(
         name=index_name,
         dimension=1536,
         metric="cosine",
         spec=ServerlessSpec(cloud="aws", region="us-east-1"),
     )
-# Initialize LangChain's Pinecone vector store.
+
 # This 'vs' object can be imported and used across the application.
-vs = PineconeVectorStore(
-    index=PINECONE_INDEX_NAME,
-    embedding=embeddings
-)
+vs = PineconeVectorStore.from_existing_index(index_name, embeddings)
 
 print("INFO: Pinecone vector store initialized.")
 

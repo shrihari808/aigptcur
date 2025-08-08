@@ -231,6 +231,20 @@ class NewsRagScoringService:
             overlap = len(question_words.intersection(text_words))
             return min(1.0, overlap / len(question_words)) if question_words else 0.5
 
+    def _standardize_passage(self, passage: dict) -> dict:
+        """Standardizes a passage to ensure it has a 'text' key."""
+        if 'text' not in passage:
+            if 'page_content' in passage:
+                passage['text'] = passage['page_content']
+            elif 'full_content_preview' in passage:
+                passage['text'] = passage['full_content_preview']
+            else:
+                # If no suitable text field is found, create a placeholder
+                title = passage.get('metadata', {}).get('title', '')
+                snippet = passage.get('metadata', {}).get('snippet', '')
+                passage['text'] = f"{title} {snippet}".strip()
+        return passage
+
     async def score_and_rerank_passages(self, question: str, passages: list[dict], **custom_weights) -> list[dict]:
         """
         Score and rerank passages using composite scoring strategy.
@@ -260,7 +274,14 @@ class NewsRagScoringService:
         scored_passages = []
         for i, passage in enumerate(passages):
             try:
+                # Standardize the passage to ensure it has a 'text' key
+                passage = self._standardize_passage(passage)
                 text = passage.get("text", "")
+                
+                if not text:
+                    print(f"WARNING: Skipping passage {i} due to empty text content.")
+                    continue
+
                 metadata = passage.get("metadata", {})
                 
                 # Calculate individual scores
@@ -335,7 +356,7 @@ class NewsRagScoringService:
         context_snippets = []
         for i, passage in enumerate(top_passages):
             metadata = passage.get('metadata', {})
-            text = passage.get('text', passage.get('full_content_preview', ''))
+            text = passage.get('text', '') # Rely on the standardized 'text' key
             
             # Create snippet with metadata
             snippet_parts = []

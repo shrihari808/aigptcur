@@ -58,7 +58,7 @@ from langchain.retrievers import ContextualCompressionRetriever
 from fastapi import FastAPI, HTTPException,Depends, Header,Query
 from psycopg2 import sql
 from contextlib import contextmanager
-from config import chroma_server_client,llm_date,llm_stream,vs,GPT4o_mini
+from config import chroma_server_client,llm_date,llm_stream,vs,GPT4o_mini, PINECONE_INDEX_NAME
 from langchain_chroma import Chroma
 import time
 from starlette.status import HTTP_403_FORBIDDEN
@@ -619,7 +619,7 @@ async def web_rag_mix(
                 documents_to_add = [Document(page_content=f"{a.get('title', '')} {a.get('description', '')}", metadata={"title": a.get('title', ''), "link": a.get('source_url', ''), "snippet": a.get('description', ''), "publication_date": a.get('published_time', ''), "date": a.get('date', ''), "source": "brave_search"}) for a in articles]
                 ids_to_add = [f"brave_{hash(a.get('source_url', f'doc_{i}'))}" for i, a in enumerate(articles)]
                 vs.add_documents(documents=documents_to_add, ids=ids_to_add)
-                print(f"DEBUG: Successfully upserted {len(documents_to_add)} documents to brave_scraped collection")
+                print(f"DEBUG: Successfully upserted {len(documents_to_add)} documents to {PINECONE_INDEX_NAME}")
             except Exception as e:
                 print(f"WARNING: Failed to upsert documents to Chroma: {e}")
             
